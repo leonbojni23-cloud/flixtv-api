@@ -30,14 +30,14 @@ async function fetchEmbed(domain, path) {
 
 function extractStream(html, baseUrl) {
   const patterns = [
-    /["'](https?:\\?\/\\?\/[^"'\\s]+?\\?\.m3u8[^"'\\s]*)["']/i,
-    /(?:file|src|url)\\s*[:=]\\s*["']([^"']+?\\.m3u8[^"']*)["']/i,
-    /(https?:\/\/[^\\s"'<>]+?\.m3u8[^\\s"'<>]*)/i
+    /["'](https?:\/\/[^"'\\s]+?\.m3u8[^"'\\s]*)["']/i,
+    /(?:file|src|url)\s*[:=]\s*["']([^"']+?\.m3u8[^"']*)["']/i,
+    /(https?:\/\/[^\s"'<>]+?\.m3u8[^\s"'<>]*)/i
   ];
   for (const pattern of patterns) {
     const match = html.match(pattern);
     if (!match) continue;
-    const candidate = match[1].replace(/\\\\\//g, "/").replace(/\\\\/g, "");
+    const candidate = match[1].replace(/\\\//g, "/").replace(/\\/g, "");
     try {
       const url = new URL(candidate, baseUrl);
       if (url.protocol === "https:" && /\.m3u8(?:$|[?#])/i.test(url.href)) return url.href;
@@ -48,18 +48,18 @@ function extractStream(html, baseUrl) {
 
 function extractSubtitles(html, baseUrl) {
   const found = new Map();
-  const trackPattern = /<track\\b[^>]*>/gi;
+  const trackPattern = /<track\b[^>]*>/gi;
   for (const tag of html.match(trackPattern) || []) {
-    const src = tag.match(/\\bsrc=["']([^"']+)["']/i)?.[1];
-    const lang = tag.match(/\\bsrclang=["']([^"']+)["']/i)?.[1]
-      || tag.match(/\\blabel=["']([^"']+)["']/i)?.[1] || "unknown";
+    const src = tag.match(/\bsrc=["']([^"']+)["']/i)?.[1];
+    const lang = tag.match(/\bsrclang=["']([^"']+)["']/i)?.[1]
+      || tag.match(/\blabel=["']([^"']+)["']/i)?.[1] || "unknown";
     if (!src) continue;
     try {
       const url = new URL(src, baseUrl);
       if (url.protocol === "https:") found.set(url.href, { lang: lang.toLowerCase(), url: url.href });
     } catch {}
   }
-  const jsonMatch = html.match(/"subtitles"\\s*:\\s*(\\[[\\s\\S]*?\\])/i);
+  const jsonMatch = html.match(/"subtitles"\s*:\s*(\[[\s\S]*?\])/i);
   if (jsonMatch) {
     try {
       for (const item of JSON.parse(jsonMatch[1])) {
@@ -79,7 +79,7 @@ function extractSubtitles(html, baseUrl) {
 }
 
 export async function getStreamData({ id, type = "movie", season, episode }) {
-  if (!/^\\d+$/.test(String(id))) throw Object.assign(new Error("Invalid TMDB id"), { statusCode: 400 });
+  if (!/^\d+$/.test(String(id))) throw Object.assign(new Error("Invalid TMDB id"), { statusCode: 400 });
   if (type !== "movie" && type !== "tv") throw Object.assign(new Error("Invalid media type"), { statusCode: 400 });
   const path = type === "tv"
     ? "/embed/tv/" + encodeURIComponent(id) + "?s=" + encodeURIComponent(season) + "&e=" + encodeURIComponent(episode)
@@ -101,8 +101,4 @@ export async function getStreamData({ id, type = "movie", season, episode }) {
   } catch {
     throw Object.assign(new Error("CineSRC did not return a playable HLS source"), { statusCode: 502 });
   }
-}
-
-export function getCineSrcDomains() {
-  return DOMAINS.map((domain) => new URL(domain).hostname);
 }
