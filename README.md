@@ -4,10 +4,7 @@ Vercel-native serverless API for FLIXTV. No Render service or Cloudflare Worker 
 
 ## Deploy
 
-1. Import `leonbojni23-cloud/flixtv-api` into Vercel.
-2. Set the project root to the repository root.
-3. Use Node.js 22.x (20.x minimum).
-4. Deploy. Vercel automatically serves the catch-all function in `api/[...path].js`. If `ALLOWED_ORIGINS` is unset, the metadata API uses public CORS (`*`); set it to exact origins to restrict browser access.
+Import `leonbojni23-cloud/flixtv-api` into Vercel with the repository root as the project root and Node.js 22.x. Vercel serves each endpoint as an independent serverless function. If `ALLOWED_ORIGINS` is unset, the metadata API uses public CORS (`*`); set it to exact origins to restrict browser access.
 
 ## Endpoints
 
@@ -16,9 +13,10 @@ Vercel-native serverless API for FLIXTV. No Render service or Cloudflare Worker 
 - `GET /api/v1/stream/movie/:tmdbId` - movie source discovery.
 - `GET /api/v1/stream/tv/:tmdbId/season/:season/episode/:episode` - TV episode source discovery.
 
-Example:
+Examples:
 ```text
 GET /api/v1/stream/movie/550
+GET /api/v1/stream/tv/1399/season/1/episode/2
 ```
 
 ## Security

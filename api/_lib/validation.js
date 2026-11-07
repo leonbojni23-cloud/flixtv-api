@@ -8,24 +8,15 @@ export function positiveInteger(value, field, max = 1_000_000) {
   return number;
 }
 
-export function parseMediaPath(path) {
-  const parts = path.split("/").filter(Boolean);
-  if (parts.length === 3 && parts[0] === "v1" && parts[1] === "stream" && parts[2] === "health") {
-    return { kind: "stream-health" };
-  }
-  if (parts.length === 4 && parts[0] === "v1" && parts[1] === "stream" && parts[2] === "movie") {
-    return { kind: "media", media: { type: "movie", id: positiveInteger(parts[3], "TMDB id") } };
-  }
-  if (parts.length === 8 && parts[0] === "v1" && parts[1] === "stream" && parts[2] === "tv" && parts[4] === "season" && parts[6] === "episode") {
-    return {
-      kind: "media",
-      media: {
-        type: "tv",
-        id: positiveInteger(parts[3], "TMDB id"),
-        season: positiveInteger(parts[5], "season", 1000),
-        episode: positiveInteger(parts[7], "episode", 10000)
-      }
-    };
-  }
-  return null;
+export function parseMovie(id) {
+  return { type: "movie", id: positiveInteger(id, "TMDB id") };
+}
+
+export function parseTv(id, season, episode) {
+  return {
+    type: "tv",
+    id: positiveInteger(id, "TMDB id"),
+    season: positiveInteger(season, "season", 1000),
+    episode: positiveInteger(episode, "episode", 10000)
+  };
 }
