@@ -30,7 +30,7 @@ async function fetchEmbed(domain, path) {
 
 function extractStream(html, baseUrl) {
   const patterns = [
-    /["'](https?:\/\/[^"'\\s]+?\.m3u8[^"'\\s]*)["']/i,
+    /["'](https?:\/\/[^"'\s]+?\.m3u8[^"'\\s]*)["']/i,
     /(?:file|src|url)\s*[:=]\s*["']([^"']+?\.m3u8[^"']*)["']/i,
     /(https?:\/\/[^\s"'<>]+?\.m3u8[^\s"'<>]*)/i
   ];
