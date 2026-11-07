@@ -1,4 +1,5 @@
-import { resolveWithCineSrc } from "../adapters/cinesrc.js";
+import { resolveWithCineSrc } from "./cinesrc.js";
+
 export async function discoverSources(media) {
   const provider = await resolveWithCineSrc(media);
   return {
@@ -6,6 +7,6 @@ export async function discoverSources(media) {
     media,
     sources: provider.available ? [provider] : [],
     providers: [provider],
-    message: provider.available ? undefined : "No configured, authorized playback provider is available"
+    message: provider.available ? null : "No authorized playback provider is currently available"
   };
 }
