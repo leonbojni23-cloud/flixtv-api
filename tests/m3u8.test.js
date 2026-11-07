@@ -20,5 +20,5 @@ test("rewrites URI attributes such as encryption keys and preserves metadata", (
 test("rejects invalid playlists and non-HTTPS sources", () => {
   assert.throws(() => rewritePlaylist("not a playlist", "https://cdn.example/a.m3u8", () => "/x"));
   assert.throws(() => rewritePlaylist("#EXTM3U\na.ts", "http://cdn.example/a.m3u8", () => "/x"));
-  assert.throws(() => rewritePlaylist("#EXTM3U\na.ts", "https://cdn.example/a.m3u8", () => "/x"));
+  assert.throws(() => rewritePlaylist("#EXTM3U\nhttp://cdn.example/a.ts", "https://cdn.example/a.m3u8", () => "/x"));
 });
