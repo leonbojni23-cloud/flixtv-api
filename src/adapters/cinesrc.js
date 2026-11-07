@@ -1,10 +1,10 @@
 /**
- * Safe CineSrc adapter boundary.
- * No embed-page scraping, private endpoint reverse engineering, or anti-bot bypass.
- * Implement only against an authorized, documented provider API.
+ * Safe CineSrc adapter boundary. It deliberately does not scrape embed HTML,
+ * reverse engineer private endpoints, defeat anti-bot systems, or extract
+ * protected media URLs. Implement only against an authorized documented API.
  */
 import { config } from "../config.js";
-export async function resolveWithCineSrc(media, { signal } = {}) {
+export async function resolveWithCineSrc(media) {
   if (!config.cinesrcEnabled || !config.cinesrcBaseUrl) {
     return { available: false, provider: "cinesrc", reason: "CineSrc integration is not configured" };
   }
@@ -12,9 +12,6 @@ export async function resolveWithCineSrc(media, { signal } = {}) {
   try { base = new URL(config.cinesrcBaseUrl); }
   catch { throw new Error("CINESRC_BASE_URL must be a valid HTTPS URL"); }
   if (base.protocol !== "https:") throw new Error("CINESRC_BASE_URL must use HTTPS");
-  // A documented API contract (endpoint, authentication, schemas, permission)
-  // is required before making requests. Do not guess an embed URL format.
-  void signal;
   return {
     available: false,
     provider: "cinesrc",

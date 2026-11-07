@@ -10,9 +10,5 @@
     "start": "node src/server.js",
     "check": "node --check src/server.js && node --check src/routes/health.js && node --check src/routes/warmup.js && node --check src/routes/stream.js && node --check src/services/source-manager.js && node --check src/adapters/cinesrc.js && node --check src/utils/validation.js && node --check src/config.js"
   },
-  "dependencies": {
-    "@fastify/cors": "^10.0.2",
-    "@fastify/rate-limit": "^10.2.2",
-    "fastify": "^5.2.1"
-  }
+  "dependencies": { "@fastify/cors": "^10.0.2", "@fastify/rate-limit": "^10.2.2", "fastify": "^5.2.1" }
 }
