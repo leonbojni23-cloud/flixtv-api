@@ -8,7 +8,7 @@ function publicBaseUrl() {
 }
 
 export async function discoverSources(media) {
-  if (process.env.CINESRC_ENABLED !== "true") {
+  if (process.env.CINESRC_ENABLED === "false") {
     const provider = { provider: "cinesrc", available: false, reason: "CineSRC is disabled" };
     return { success: true, media, sources: [], providers: [provider], message: "No playback source available" };
   }
