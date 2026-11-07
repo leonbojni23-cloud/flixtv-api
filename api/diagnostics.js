@@ -103,7 +103,10 @@ async function inspectResource(url, label) {
     const contentType = response.headers.get('content-type') || 'unknown';
     const status = response.status;
     const prefix = await readTextLimited(response, 2048);
-    const ok = response.ok || status === 206;
+    const httpOk = response.ok || status === 206;
+    const isFmp4 = prefix.includes('ftyp') || prefix.includes('moof') || prefix.includes('mdat');
+    const isSubtitle = /WEBVTT|-->/.test(prefix) || /^\\s*1\\s*\\r?\\n\\d{2}:\\d{2}/.test(prefix);
+    const ok = httpOk && (label !== 'subtitle' || isSubtitle);
 
     return {
       label,
@@ -113,10 +116,10 @@ async function inspectResource(url, label) {
       rangeSupported: status === 206,
       bytesInspected: new TextEncoder().encode(prefix).byteLength,
       signature: label === 'init' || label === 'segment'
-        ? (prefix.includes('ftyp') || prefix.includes('moof') || prefix.includes('mdat')
-            ? 'fMP4 signature detected'
-            : 'fMP4 signature not confirmed')
-        : undefined,
+        ? (isFmp4 ? 'fMP4 signature detected' : 'fMP4 signature not confirmed')
+        : label === 'subtitle'
+          ? (isSubtitle ? 'SRT/VTT text detected' : 'subtitle format not confirmed')
+          : undefined,
       url: safeUrlInfo(response.url || url)
     };
   } catch (error) {
@@ -220,8 +223,6 @@ export default async function handler(req) {
     }
 
     const parsed = parsePlaylist(manifestText, manifestResponse.url || manifestUrl);
-    let mediaPlaylistText = manifestText;
-    let mediaPlaylistUrl = manifestResponse.url || manifestUrl;
     let mediaParsed = parsed;
     let variantCheck = null;
 
@@ -237,8 +238,6 @@ export default async function handler(req) {
         contentType: variantResponse.headers.get('content-type') || 'unknown'
       };
       if (variantResponse.ok && variantText.startsWith('#EXTM3U')) {
-        mediaPlaylistText = variantText;
-        mediaPlaylistUrl = variantResponse.url || parsed.variantUrl;
         mediaParsed = parsePlaylist(variantText, mediaPlaylistUrl);
       }
     }
