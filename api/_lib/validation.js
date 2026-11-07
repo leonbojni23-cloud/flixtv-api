@@ -1,9 +1,9 @@
 export function positiveInteger(value, field, max = 1_000_000) {
   const text = String(value ?? "");
-  if (!/^\d+$/.test(text)) throw Object.assign(new Error(\`Invalid \${field}\`), { statusCode: 400 });
+  if (!/^\d+$/.test(text)) throw Object.assign(new Error("Invalid " + field), { statusCode: 400 });
   const number = Number(text);
   if (!Number.isSafeInteger(number) || number < 1 || number > max) {
-    throw Object.assign(new Error(\`Invalid \${field}\`), { statusCode: 400 });
+    throw Object.assign(new Error("Invalid " + field), { statusCode: 400 });
   }
   return number;
 }
