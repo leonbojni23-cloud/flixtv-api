@@ -26,11 +26,11 @@ GET /api/v1/stream/tv/1399/season/1/episode/2
 - For a public client deployment, leave the secret unset and add platform-level rate limiting/abuse protection before enabling any provider that consumes paid or limited upstream resources.
 - Never commit provider keys.
 
-## CineSrc
+## CineSrc and HLS
 
-The adapter is intentionally disabled until an authorized, documented CineSrc API contract is available. It does not scrape embed HTML, reverse engineer private endpoints, bypass anti-bot protections, or proxy protected streams. A generic HLS player or proxy cannot make unauthorized content distribution permissible.
+The CineSrc adapter remains disabled until its documented, authorized resolver endpoint and response schema are configured. The project now includes `api/_lib/m3u8.js`, a tested HLS playlist rewriter that preserves playlist tags and metadata and converts relative segment, key, and rendition references through a server-side proxy URL builder. It requires HTTPS source URLs.
 
-To complete the adapter, supply the provider's official API documentation, permitted use, authentication method, and response schema. Then the server-side adapter can be implemented against that contract without exposing provider credentials to FLIXTV.
+The supplied draft's HTML scraping, browser impersonation intended to defeat Cloudflare, private server-action discovery, and arbitrary-URL proxy are not deployed. Those mechanisms are not a substitute for the provider's approved integration interface. The adapter must be connected to CineSRC's approved resolver contract before it can return playable sources.
 
 ## Local checks
 
