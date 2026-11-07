@@ -4,13 +4,13 @@ const allowedOrigins = () => (process.env.ALLOWED_ORIGINS || "")
 export function applyCors(req, res) {
   const origin = req.headers.origin;
   const allowed = allowedOrigins();
-  if (origin && !allowed.includes(origin)) {
+  if (origin && allowed.length > 0 && !allowed.includes(origin)) {
     sendJson(res, 403, { success: false, error: "Origin not allowed" });
     return false;
   }
   if (origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Origin", allowed.length > 0 ? origin : "*");
+    if (allowed.length > 0) res.setHeader("Vary", "Origin");
   }
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");

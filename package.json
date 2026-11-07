@@ -1,0 +1,13 @@
+{
+  "name": "flixtv-api",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Vercel serverless API for FLIXTV",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "npx vercel dev",
+    "check": "node --check 'api/[...path].js' && node --check api/_lib/http.js && node --check api/_lib/validation.js && node --check api/_lib/source-manager.js && node --check api/_lib/cinesrc.js",
+    "test": "node --test"
+  }
+}
