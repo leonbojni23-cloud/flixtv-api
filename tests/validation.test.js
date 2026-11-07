@@ -1,24 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseMediaPath, positiveInteger } from "../api/_lib/validation.js";
+import { parseMovie, parseTv, positiveInteger } from "../api/_lib/validation.js";
 
-test("accepts valid movie path", () => {
-  assert.deepEqual(parseMediaPath("v1/stream/movie/550"), {
-    kind: "media",
-    media: { type: "movie", id: 550 }
+test("accepts a valid movie ID", () => {
+  assert.deepEqual(parseMovie("550"), { type: "movie", id: 550 });
+});
+
+test("accepts a valid TV episode", () => {
+  assert.deepEqual(parseTv("1399", "1", "2"), {
+    type: "tv", id: 1399, season: 1, episode: 2
   });
 });
 
-test("accepts valid TV episode path", () => {
-  assert.deepEqual(parseMediaPath("v1/stream/tv/1399/season/1/episode/2"), {
-    kind: "media",
-    media: { type: "tv", id: 1399, season: 1, episode: 2 }
-  });
-});
-
-test("rejects invalid IDs and path traversal", () => {
+test("rejects invalid IDs and episode values", () => {
   assert.throws(() => positiveInteger("0", "id"));
   assert.throws(() => positiveInteger("1.5", "id"));
-  assert.equal(parseMediaPath("v1/stream/movie/../../secret"), null);
-  assert.equal(parseMediaPath("v1/stream/tv/1/season/1001/episode/1"), null);
+  assert.throws(() => parseTv("1399", "1001", "1"));
+  assert.throws(() => parseTv("1399", "1", "10001"));
 });

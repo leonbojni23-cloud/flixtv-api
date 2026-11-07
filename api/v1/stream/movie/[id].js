@@ -6,7 +6,9 @@ import { discoverSources } from "../../../_lib/source-manager.js";
 export default async function handler(req, res) {
   if (!prepareApiRequest(req, res, { protectedRoute: true })) return;
   try {
-    const media = parseMovie(req.query.id);
+    const url = new URL(req.url, "https://flixtv-api.invalid");
+    const id = req.query?.id ?? url.pathname.split("/").filter(Boolean).at(-1);
+    const media = parseMovie(id);
     return sendJson(res, 200, await discoverSources(media));
   } catch (error) {
     const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
