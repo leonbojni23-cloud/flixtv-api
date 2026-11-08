@@ -370,12 +370,22 @@ export default async function handler(req) {
 
     if (!response.ok && response.status !== 206) {
       const contentRange = response.headers.get('content-range');
-      const extra = contentRange ? { 'Content-Range': contentRange } : {};
-      try { await response.body?.cancel(); } catch {}
-      return withSessionCookie(new Response('Burimi ktheu statusin ' + response.status, {
+      const contentType = response.headers.get('content-type') || 'unknown';
+      let upstreamBody = '';
+      try { upstreamBody = (await response.text()).slice(0, 400); } catch {}
+      console.error('[CineSRC Proxy] Upstream rejected resource', {
         status: response.status,
-        headers: corsHeaders({ 'Cache-Control': 'no-store', ...extra }, req)
-      }), jar);
+        resource: safeResource(finalUrl),
+        contentType,
+        body: upstreamBody.replace(/https?:\\/\\/[^\\s"']+/g, '[url-redacted]')
+      });
+      const extra = contentRange ? { 'Content-Range': contentRange } : {};
+      return withSessionCookie(jsonError('Burimi refuzoi kërkesën e videos.', 502, {
+        upstreamStatus: response.status,
+        resource: safeResource(finalUrl),
+        upstreamContentType: contentType,
+        upstreamMessage: upstreamBody.slice(0, 200)
+      }, req), jar);
     }
 
     const upstreamContentType = response.headers.get('content-type') || 'application/octet-stream';
