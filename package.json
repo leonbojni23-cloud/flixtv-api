@@ -1,8 +1,10 @@
 {
-  "name": "flixtv-api-advanced",
-  "version": "2.0.0",
+  "name": "flixtv-api-headless",
+  "version": "4.0.0",
+  "private": true,
   "type": "module",
   "dependencies": {
-    "cheerio": "^1.0.0-rc.12"
+    "@sparticuz/chromium": "^123.0.0",
+    "puppeteer-core": "^22.0.0"
   }
 }
