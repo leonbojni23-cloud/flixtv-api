@@ -1,5 +1,12 @@
 {
   "version": 2,
+  "functions": {
+    "api/stream.js": {
+      "includeFiles": "node_modules/@sparticuz/chromium/bin/**",
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  },
   "headers": [
     {
       "source": "/api/(.*)",
