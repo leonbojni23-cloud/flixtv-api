@@ -172,7 +172,10 @@ export default async function handler(req, res) {
       throw new Error('URL e stream-it nuk kaloi kontrollin e host-it.');
     }
 
-    const streamUrl = `/api/proxy?url=${encodeURIComponent(stream.url)}`;
+    const pageReferrer = type === 'movie'
+      ? `${CINESRC_ORIGIN}/embed/movie/${tmdbId}`
+      : `${CINESRC_ORIGIN}/embed/tv/${tmdbId}?s=${seasonNumber}&e=${episodeNumber}`;
+    const streamUrl = `/api/proxy?ref=${encodeURIComponent(pageReferrer)}&url=${encodeURIComponent(stream.url)}`;
 
     return res.status(200).json({
       success: true,
