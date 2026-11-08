@@ -386,14 +386,6 @@ export default async function handler(req) {
         upstreamContentType: contentType,
         upstreamBodyLength: upstreamBody.length
       }, req), jar);
-      });
-      const extra = contentRange ? { 'Content-Range': contentRange } : {};
-      return withSessionCookie(jsonError('Burimi refuzoi kërkesën e videos.', 502, {
-        upstreamStatus: response.status,
-        resource: safeResource(finalUrl),
-        upstreamContentType: contentType,
-        upstreamMessage: upstreamBody.slice(0, 200)
-      }, req), jar);
     }
 
     const upstreamContentType = response.headers.get('content-type') || 'application/octet-stream';
