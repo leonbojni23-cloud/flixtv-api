@@ -5,6 +5,63 @@ export const config = { runtime: 'edge' };
 
 const DEFAULT_ALLOWED_HOSTS = ['cinesrc.st', 'bright67.online'];
 const MAX_REDIRECTS = 8;
+const SESSION_COOKIE = 'cinesrc_proxy_session';
+
+function restoreSession(req, jar) {
+  const raw = req.headers.get('cookie') || '';
+  const match = raw.match(new RegExp('(?:^|;\\s*)' + SESSION_COOKIE + '=([^;]+)'));
+  if (!match) return;
+
+  try {
+    const binary = atob(match[1].replace(/-/g, '+').replace(/_/g, '/'));
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    const entries = JSON.parse(new TextDecoder().decode(bytes));
+    if (!Array.isArray(entries)) return;
+
+    for (const item of entries) {
+      if (!item || typeof item.name !== 'string' ||
+          typeof item.value !== 'string' ||
+          typeof item.domain !== 'string' ||
+          typeof item.path !== 'string') continue;
+      if (!isAllowedHost(item.domain) || !item.path.startsWith('/')) continue;
+      jar.set(item.name + '@' + item.domain + item.path, {
+        name: item.name,
+        value: item.value,
+        domain: item.domain,
+        path: item.path,
+        secure: item.secure !== false
+      });
+    }
+  } catch {
+    // Një cookie sesioni e pavlefshme nuk duhet të prishë playback.
+  }
+}
+
+function sessionCookie(jar) {
+  const entries = [...jar.values()].slice(-30);
+  if (!entries.length) {
+    return SESSION_COOKIE + '=; Path=/api/proxy; Max-Age=0; HttpOnly; Secure; SameSite=Lax';
+  }
+
+  const bytes = new TextEncoder().encode(JSON.stringify(entries));
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const value = btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
+  if (value.length > 3800) {
+    return SESSION_COOKIE + '=; Path=/api/proxy; Max-Age=0; HttpOnly; Secure; SameSite=Lax';
+  }
+  return SESSION_COOKIE + '=' + value + '; Path=/api/proxy; Max-Age=1800; HttpOnly; Secure; SameSite=Lax';
+}
+
+function withSessionCookie(response, jar) {
+  const headers = new Headers(response.headers);
+  headers.set('Set-Cookie', sessionCookie(jar));
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
 
 function isAllowedHost(hostname) {
   const configured = (process.env.PROXY_ALLOWED_HOSTS || '')
@@ -193,6 +250,9 @@ export default async function handler(req) {
     return jsonError('Host-i i burimit nuk lejohet', 403);
   }
 
+  const jar = new Map();
+  restoreSession(req, jar);
+
   try {
     const upstreamHeaders = new Headers({
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
@@ -207,7 +267,6 @@ export default async function handler(req) {
     const range = req.headers.get('range');
     if (range) upstreamHeaders.set('Range', range);
 
-    const jar = new Map();
     const { response, finalUrl } = await fetchFollowingRedirects(
       targetUrl.href,
       req.method,
@@ -219,10 +278,10 @@ export default async function handler(req) {
       const contentRange = response.headers.get('content-range');
       const extra = contentRange ? { 'Content-Range': contentRange } : {};
       try { await response.body?.cancel(); } catch {}
-      return new Response('Burimi ktheu statusin ' + response.status, {
+      return withSessionCookie(new Response('Burimi ktheu statusin ' + response.status, {
         status: response.status,
         headers: corsHeaders({ 'Cache-Control': 'no-store', ...extra })
-      });
+      }), jar);
     }
 
     const contentType = response.headers.get('content-type') || 'application/octet-stream';
@@ -230,41 +289,41 @@ export default async function handler(req) {
 
     if (isLikelySegment(targetUrl.href) && playlistResponse) {
       try { await response.body?.cancel(); } catch {}
-      return jsonError(
+      return withSessionCookie(jsonError(
         'Kërkesa për segment video mori playlist M3U8 nga CDN. Mund të ketë skaduar URL-ja e segmentit.',
         502,
         { resource: safeResource(finalUrl), upstreamStatus: response.status }
-      );
+      ), jar);
     }
 
     if (playlistResponse) {
       if (req.method === 'HEAD') {
         try { await response.body?.cancel(); } catch {}
-        return new Response(null, {
+        return withSessionCookie(new Response(null, {
           status: response.status,
           headers: corsHeaders({
             'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
             'Cache-Control': 'no-store'
           })
-        });
+        }), jar);
       }
 
       const playlist = await response.text();
       if (!playlist.trimStart().startsWith('#EXTM3U')) {
-        return jsonError('CDN deklaroi M3U8, por përmbajtja nuk është playlist HLS.', 502, {
+        return withSessionCookie(jsonError('CDN deklaroi M3U8, por përmbajtja nuk është playlist HLS.', 502, {
           resource: safeResource(finalUrl)
-        });
+        }), jar);
       }
 
       const proxyBase = requestUrl.origin + '/api/proxy?url=';
       const rewritten = rewritePlaylist(playlist, finalUrl, proxyBase);
-      return new Response(rewritten, {
+      return withSessionCookie(new Response(rewritten, {
         status: 200,
         headers: corsHeaders({
           'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
           'Cache-Control': 'no-store'
         })
-      });
+      }), jar);
     }
 
     const responseHeaders = corsHeaders({
@@ -278,12 +337,12 @@ export default async function handler(req) {
     if (acceptRanges) responseHeaders['Accept-Ranges'] = acceptRanges;
     if (contentLength) responseHeaders['Content-Length'] = contentLength;
 
-    return new Response(req.method === 'HEAD' ? null : response.body, {
+    return withSessionCookie(new Response(req.method === 'HEAD' ? null : response.body, {
       status: response.status,
       headers: responseHeaders
-    });
+    }), jar);
   } catch (error) {
     console.error('[CineSRC Proxy]', error.message);
-    return jsonError('Gabim në Proxy: ' + error.message, 502);
+    return withSessionCookie(jsonError('Gabim në Proxy: ' + error.message, 502), jar);
   }
 }
