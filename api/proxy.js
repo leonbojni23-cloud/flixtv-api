@@ -266,14 +266,26 @@ export default async function handler(req) {
   const jar = new Map();
   restoreSession(req, jar);
 
+  // Use the actual CineSRC embed page as the upstream referrer. Some CDN
+  // edges reject requests carrying only the site's homepage as Referer.
+  let pageReferrer = 'https://cinesrc.st/';
+  const requestedReferrer = requestUrl.searchParams.get('ref');
+  if (requestedReferrer) {
+    try {
+      const parsedReferrer = new URL(requestedReferrer);
+      if (parsedReferrer.protocol === 'https:' &&
+          (parsedReferrer.hostname === 'cinesrc.st' || parsedReferrer.hostname.endsWith('.cinesrc.st'))) {
+        pageReferrer = parsedReferrer.href;
+      }
+    } catch {}
+  }
+
   try {
     const upstreamHeaders = new Headers({
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
       'Accept': '*/*',
       'Accept-Language': 'en-US,en;q=0.9',
-      'Referer': targetUrl.hostname.toLowerCase().endsWith('bright67.online')
-        ? 'https://cinesrc.st/'
-        : 'https://cinesrc.st/',
+      'Referer': pageReferrer,
       'Origin': 'https://cinesrc.st'
     });
 
