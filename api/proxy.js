@@ -180,6 +180,62 @@ function isLikelySegment(url) {
   }
 }
 
+async function sniffFmp4Segment(response, targetUrl) {
+  let responseBody = response.body;
+  let contentType = response.headers.get('content-type') || 'application/octet-stream';
+
+  // CineSRC disguises fragmented MP4 media fragments with a .jpg suffix.
+  // The bytes are still ISO-BMFF (styp/moof/sidx), so expose the correct MIME
+  // type to native HLS clients instead of forwarding image/jpeg.
+  let pathname = '';
+  try { pathname = new URL(targetUrl).pathname; } catch {}
+  if (!/\\.jpe?g$/i.test(pathname) || !responseBody) {
+    return { body: responseBody, contentType };
+  }
+
+  const reader = responseBody.getReader();
+  const first = await reader.read();
+  if (first.done || !first.value) {
+    return { body: null, contentType };
+  }
+
+  const prefix = String.fromCharCode(...first.value.slice(0, 64));
+  if (!/(?:ftyp|styp|moof|sidx)/.test(prefix)) {
+    const firstChunk = first.value;
+    const body = new ReadableStream({
+      async pull(controller) {
+        if (firstChunk) {
+          controller.enqueue(firstChunk);
+          firstChunk = null;
+          return;
+        }
+        const next = await reader.read();
+        if (next.done) controller.close();
+        else controller.enqueue(next.value);
+      },
+      cancel(reason) { return reader.cancel(reason); }
+    });
+    return { body, contentType };
+  }
+
+  let firstChunk = first.value;
+  const body = new ReadableStream({
+    async pull(controller) {
+      if (firstChunk) {
+        controller.enqueue(firstChunk);
+        firstChunk = null;
+        return;
+      }
+      const next = await reader.read();
+      if (next.done) controller.close();
+      else controller.enqueue(next.value);
+    },
+    cancel(reason) { return reader.cancel(reason); }
+  });
+
+  return { body, contentType: 'video/mp4' };
+}
+
 async function fetchFollowingRedirects(initialUrl, method, headers, jar) {
   let currentUrl = initialUrl;
   const visited = new Set();
@@ -309,8 +365,8 @@ export default async function handler(req) {
       }), jar);
     }
 
-    const contentType = response.headers.get('content-type') || 'application/octet-stream';
-    const playlistResponse = isPlaylist(finalUrl, contentType);
+    const upstreamContentType = response.headers.get('content-type') || 'application/octet-stream';
+    const playlistResponse = isPlaylist(finalUrl, upstreamContentType);
 
     if (isLikelySegment(targetUrl.href) && playlistResponse) {
       try { await response.body?.cancel(); } catch {}
@@ -351,8 +407,9 @@ export default async function handler(req) {
       }), jar);
     }
 
+    const normalizedSegment = await sniffFmp4Segment(response, targetUrl.href);
     const responseHeaders = corsHeaders({
-      'Content-Type': contentType,
+      'Content-Type': normalizedSegment.contentType,
       'Cache-Control': 'no-store'
     }, req);
     const contentRange = response.headers.get('content-range');
@@ -362,7 +419,7 @@ export default async function handler(req) {
     if (acceptRanges) responseHeaders['Accept-Ranges'] = acceptRanges;
     if (contentLength) responseHeaders['Content-Length'] = contentLength;
 
-    return withSessionCookie(new Response(req.method === 'HEAD' ? null : response.body, {
+    return withSessionCookie(new Response(req.method === 'HEAD' ? null : normalizedSegment.body, {
       status: response.status,
       headers: responseHeaders
     }), jar);
