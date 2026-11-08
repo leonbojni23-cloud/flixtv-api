@@ -2,12 +2,8 @@ const ALLOWED_HOSTS = new Set(["videasy.ws", "player.videasy.ws"]);
 const MAX_REDIRECTS = 6;
 
 function isAllowedHost(host) {
-  const value = String(host || "").toLowerCase().replace(/\\.$/, "");
+  const value = String(host || "").toLowerCase().replace(/\.$/, "");
   return ALLOWED_HOSTS.has(value) || value.endsWith(".videasy.ws");
-}
-
-function proxyPath(origin, host, path) {
-  return origin + "/videasy/" + host + "/" + String(path || "").replace(/^\\/+/, "");
 }
 
 function rewriteText(source, origin, host, contentType) {
@@ -15,16 +11,15 @@ function rewriteText(source, origin, host, contentType) {
   const hosts = ["player.videasy.ws", "videasy.ws"];
   for (const upstreamHost of hosts) {
     const local = origin + "/videasy/" + upstreamHost;
-    output = output.replace(new RegExp("https?://" + upstreamHost.replace(/\\./g, "\\\\.") , "gi"), local);
-    output = output.replace(new RegExp("//" + upstreamHost.replace(/\\./g, "\\\\.") , "gi"), "//" + new URL(origin).host + "/videasy/" + upstreamHost);
+    output = output.replace(new RegExp("https?://" + upstreamHost.replace(/\./g, "\\.") , "gi"), local);
+    output = output.replace(new RegExp("//" + upstreamHost.replace(/\./g, "\\.") , "gi"), "//" + new URL(origin).host + "/videasy/" + upstreamHost);
   }
 
-  if (/text\\/html/i.test(contentType)) {
+  if (/text\/html/i.test(contentType)) {
     const root = origin + "/videasy/" + host + "/";
-    output = output.replace(/(<(?:script|img|iframe|source|video|audio|link|a|form|meta)\\b[^>]*?\\b(?:src|href|action|poster|data-src)\\s*=\\s*["'])\\/(?!\\/)/gi, "$1" + root);
-    output = output.replace(/<meta\\b[^>]*http-equiv\\s*=\\s*["']?content-security-policy["']?[^>]*>/gi, "");
-    output = output.replace(/<base\\b[^>]*>/gi, "");
-    const base = proxyPath(origin, host, "");
+    output = output.replace(/(<(?:script|img|iframe|source|video|audio|link|a|form|meta)\b[^>]*?\b(?:src|href|action|poster|data-src)\s*=\s*["'])\/(?!\/)/gi, "$1" + root);
+    output = output.replace(/<meta\b[^>]*http-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/gi, "");
+    output = output.replace(/<base\b[^>]*>/gi, "");
     const guard = `<script data-flix-popup-guard>
 (()=> {
   const host = ${JSON.stringify(host)};
@@ -39,7 +34,7 @@ function rewriteText(source, origin, host, contentType) {
       if (!raw) return value;
       const url = new URL(raw, location.href);
       if (url.origin === location.origin && !url.pathname.startsWith("/videasy/")) {
-        url.pathname = prefix + url.pathname.replace(/^\\/+/, "");
+        url.pathname = prefix + url.pathname.replace(/^\/+/, "");
         return url.href;
       }
       return value;
@@ -96,13 +91,13 @@ function rewriteText(source, origin, host, contentType) {
   console.info("[FLIXTV Proxy] Popup protection active");
 })();
 </script>`;
-    const headMatch = output.match(/<head\\b[^>]*>/i);
+    const headMatch = output.match(/<head\b[^>]*>/i);
     if (headMatch) output = output.replace(headMatch[0], headMatch[0] + guard);
     else output = guard + output;
-    output = output.replace(/<head\\b[^>]*>/i, match => match + '<base href="' + base + '">');
-  } else if (/text\\/css/i.test(contentType)) {
+    output = output.replace(/<head\b[^>]*>/i, match => match + '<base href="' + base + '">');
+  } else if (/text\/css/i.test(contentType)) {
     const root = origin + "/videasy/" + host + "/";
-    output = output.replace(/url\\(\\s*(["']?)\\/(?!\\/)/gi, "url($1" + root);
+    output = output.replace(/url\(\s*(["']?)\/(?!\/)/gi, "url($1" + root);
   }
 
   return output;
@@ -111,13 +106,13 @@ function rewriteText(source, origin, host, contentType) {
 function getSetCookies(headers) {
   if (typeof headers.getSetCookie === "function") return headers.getSetCookie();
   const value = headers.get("set-cookie");
-  return value ? value.split(/,(?=\\s*[^;,=\\s]+=[^;,]*)/g) : [];
+  return value ? value.split(/,(?=\s*[^;,=\s]+=[^;,]*)/g) : [];
 }
 
 function safeCookie(raw) {
   return raw
-    .replace(/;\\s*domain=[^;]*/i, "")
-    .replace(/;\\s*path=[^;]*/i, "; Path=/videasy");
+    .replace(/;\s*domain=[^;]*/i, "")
+    .replace(/;\s*path=[^;]*/i, "; Path=/videasy");
 }
 
 export default async function handler(request) {
@@ -129,11 +124,11 @@ export default async function handler(request) {
 
   const host = String(incoming.searchParams.get("host") || "").toLowerCase();
   const path = String(incoming.searchParams.get("path") || "");
-  if (!isAllowedHost(host) || path.includes("..") || path.includes("\\\\")) {
+  if (!isAllowedHost(host) || path.includes("..") || path.includes("\\")) {
     return new Response("Videasy proxy: host ose path nuk lejohet.", { status: 403 });
   }
 
-  const upstreamUrl = new URL("https://" + host + "/" + path.replace(/^\\/+/, ""));
+  const upstreamUrl = new URL("https://" + host + "/" + path.replace(/^\/+/, ""));
   for (const [key, value] of incoming.searchParams) {
     if (key !== "host" && key !== "path") upstreamUrl.searchParams.append(key, value);
   }
@@ -150,8 +145,9 @@ export default async function handler(request) {
     if (value) headers.set(name, value);
   }
 
+  let method = request.method;
   let body;
-  if (request.method !== "GET" && request.method !== "HEAD") body = await request.arrayBuffer();
+  if (method !== "GET" && method !== "HEAD") body = await request.arrayBuffer();
   let currentUrl = upstreamUrl;
   let upstream;
 
@@ -161,9 +157,9 @@ export default async function handler(request) {
         return new Response("Videasy proxy: redirect jashtë host-eve të lejuara.", { status: 502 });
       }
       upstream = await fetch(currentUrl.toString(), {
-        method: request.method,
+        method,
         headers,
-        body: request.method === "GET" || request.method === "HEAD" ? undefined : body,
+        body: method === "GET" || method === "HEAD" ? undefined : body,
         redirect: "manual"
       });
       if (![301, 302, 303, 307, 308].includes(upstream.status)) break;
@@ -181,7 +177,7 @@ export default async function handler(request) {
 
     if (!upstream) return new Response("Videasy upstream unavailable.", { status: 502 });
     const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-    const textual = /text\\/html|javascript|ecmascript|text\\/css|application\\/json/i.test(contentType);
+    const textual = /text\/html|javascript|ecmascript|text\/css|application\/json/i.test(contentType);
     const responseHeaders = new Headers({
       "Content-Type": contentType,
       "Cache-Control": "no-store",
