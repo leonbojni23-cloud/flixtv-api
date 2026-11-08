@@ -1,3 +1,5 @@
+export const config = { runtime: "edge" };
+
 const ALLOWED_HOSTS = new Set(["videasy.ws", "player.videasy.ws"]);
 const MAX_REDIRECTS = 6;
 
