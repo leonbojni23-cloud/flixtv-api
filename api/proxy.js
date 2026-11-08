@@ -7,13 +7,10 @@ const DEFAULT_ALLOWED_HOSTS = ['cinesrc.st', 'bright67.online'];
 const MAX_REDIRECTS = 8;
 const SESSION_COOKIE = 'cinesrc_proxy_session';
 
-function restoreSession(req, jar) {
-  const raw = req.headers.get('cookie') || '';
-  const match = raw.match(new RegExp('(?:^|;\\s*)' + SESSION_COOKIE + '=([^;]+)'));
-  if (!match) return;
-
+function decodeSession(value, jar) {
+  if (!value || typeof value !== 'string' || value.length > 8000) return;
   try {
-    const binary = atob(match[1].replace(/-/g, '+').replace(/_/g, '/'));
+    const binary = atob(value.replace(/-/g, '+').replace(/_/g, '/'));
     const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
     const entries = JSON.parse(new TextDecoder().decode(bytes));
     if (!Array.isArray(entries)) return;
@@ -33,8 +30,26 @@ function restoreSession(req, jar) {
       });
     }
   } catch {
-    // Një cookie sesioni e pavlefshme nuk duhet të prishë playback.
+    // Një token sesioni i pavlefshëm nuk duhet të prishë playback.
   }
+}
+
+function restoreSession(req, jar, urlSession) {
+  const raw = req.headers.get('cookie') || '';
+  const match = raw.match(new RegExp('(?:^|;\\s*)' + SESSION_COOKIE + '=([^;]+)'));
+  if (match) decodeSession(match[1], jar);
+  // HLS clients and browsers do not always persist cross-origin cookies.
+  // Carry the upstream cookie jar inside each rewritten proxy URL instead.
+  decodeSession(urlSession, jar);
+}
+
+function encodeSession(jar) {
+  const entries = [...jar.values()].slice(-30);
+  if (!entries.length) return '';
+  const bytes = new TextEncoder().encode(JSON.stringify(entries));
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
 }
 
 function sessionCookie(jar) {
@@ -318,7 +333,7 @@ export default async function handler(req) {
   }
 
   const jar = new Map();
-  restoreSession(req, jar);
+  restoreSession(req, jar, requestUrl.searchParams.get('session'));
 
   // Use the actual CineSRC embed page as the upstream referrer. Some CDN
   // edges reject requests carrying only the site's homepage as Referer.
@@ -394,7 +409,7 @@ export default async function handler(req) {
         }, req), jar);
       }
 
-      const proxyBase = requestUrl.origin + '/api/proxy?ref=' + encodeURIComponent(pageReferrer) + '&url=';
+      const session = encodeSession(jar);\n      const proxyBase = requestUrl.origin + '/api/proxy?ref=' + encodeURIComponent(pageReferrer) +\n        (session ? '&session=' + encodeURIComponent(session) : '') + '&url=';
       const rewritten = rewritePlaylist(playlist, finalUrl, proxyBase);
       return withSessionCookie(new Response(rewritten, {
         status: 200,
