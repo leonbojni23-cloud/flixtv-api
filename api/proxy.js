@@ -11,10 +11,8 @@ function isAllowedHost(hostname) {
     .map((host) => host.trim().toLowerCase())
     .filter(Boolean);
 
-  const allowedHosts = [...DEFAULT_ALLOWED_HOSTS, ...configured];
-
-  return allowedHosts.some((allowed) => {
-    const normalized = allowed.replace(/^\.+/, '');
+  return [...DEFAULT_ALLOWED_HOSTS, ...configured].some((allowed) => {
+    const normalized = allowed.replace(/^\\.+/, '');
     return hostname === normalized || hostname.endsWith(`.${normalized}`);
   });
 }
@@ -26,6 +24,16 @@ function corsHeaders(extra = {}) {
     'Access-Control-Allow-Headers': 'Range, Content-Type',
     ...extra
   };
+}
+
+function jsonError(message, status) {
+  return new Response(JSON.stringify({ success: false, error: message }), {
+    status,
+    headers: corsHeaders({
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store'
+    })
+  });
 }
 
 export default async function handler(req) {
@@ -43,29 +51,17 @@ export default async function handler(req) {
   const requestUrl = new URL(req.url);
   const target = requestUrl.searchParams.get('url');
 
-  if (!target) {
-    return new Response('Mungon parametri url', {
-      status: 400,
-      headers: corsHeaders()
-    });
-  }
+  if (!target) return jsonError('Mungon parametri url', 400);
 
   let targetUrl;
   try {
     targetUrl = new URL(target);
   } catch {
-    return new Response('URL e pavlefshme', {
-      status: 400,
-      headers: corsHeaders()
-    });
+    return jsonError('URL e pavlefshme', 400);
   }
 
-  // Proxy publik pa kufizim host-esh do të krijonte rrezik SSRF.
   if (targetUrl.protocol !== 'https:' || !isAllowedHost(targetUrl.hostname.toLowerCase())) {
-    return new Response('Host-i i burimit nuk lejohet', {
-      status: 403,
-      headers: corsHeaders()
-    });
+    return jsonError('Host-i i burimit nuk lejohet', 403);
   }
 
   try {
@@ -77,7 +73,6 @@ export default async function handler(req) {
       'Accept-Language': 'en-US,en;q=0.9'
     };
 
-    // Mbështet Range për seek dhe kërkesa të pjesshme të player-it.
     const range = req.headers.get('range');
     if (range) upstreamHeaders.Range = range;
 
@@ -87,24 +82,48 @@ export default async function handler(req) {
       redirect: 'follow'
     });
 
+    // Kontrollo edhe URL-në pas redirect-it, jo vetëm URL-në fillestare.
+    const finalUrl = new URL(response.url || targetUrl.href);
+    if (finalUrl.protocol !== 'https:' || !isAllowedHost(finalUrl.hostname.toLowerCase())) {
+      try { await response.body?.cancel(); } catch {}
+      return jsonError('Redirect-i çoi te një host i palejuar', 403);
+    }
+
     if (!response.ok && response.status !== 206) {
+      const headers = corsHeaders({ 'Cache-Control': 'no-store' });
+      const contentRange = response.headers.get('content-range');
+      if (contentRange) headers['Content-Range'] = contentRange;
       return new Response(`Burimi ktheu statusin ${response.status}`, {
         status: response.status,
-        headers: corsHeaders({ 'Cache-Control': 'no-store' })
+        headers
       });
     }
 
     const contentType = response.headers.get('content-type') || 'application/octet-stream';
     const isM3U8 =
-      /\.m3u8(?:$|[?#])/i.test(targetUrl.href) ||
-      /mpegurl|vnd\.apple\.mpegurl/i.test(contentType);
+      /\\.m3u8(?:$|[?#])/i.test(finalUrl.href) ||
+      /mpegurl|vnd\\.apple\\.mpegurl/i.test(contentType);
 
     if (isM3U8) {
-      const playlist = await response.text();
-      const proxyBase = `${requestUrl.origin}/api/proxy?url=`;
-      const rewritten = rewritePlaylist(playlist, response.url || targetUrl.href, proxyBase);
+      if (req.method === 'HEAD') {
+        return new Response(null, {
+          status: response.status,
+          headers: corsHeaders({
+            'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
+            'Cache-Control': 'no-store'
+          })
+        });
+      }
 
-      return new Response(req.method === 'HEAD' ? null : rewritten, {
+      const playlist = await response.text();
+      if (!playlist.trimStart().startsWith('#EXTM3U')) {
+        return jsonError('Përgjigjja nga burimi nuk është playlist HLS', 502);
+      }
+
+      const proxyBase = `${requestUrl.origin}/api/proxy?url=`;
+      const rewritten = rewritePlaylist(playlist, finalUrl.href, proxyBase);
+
+      return new Response(rewritten, {
         status: 200,
         headers: corsHeaders({
           'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
@@ -113,9 +132,7 @@ export default async function handler(req) {
       });
     }
 
-    // Për init.mp4 dhe segmentet fMP4/TS, transmeto body pa e futur
-    // të gjithë segmentin në memorie. Mos kopjo Content-Length ose
-    // Content-Encoding sepse fetch mund ta ketë dekoduar përgjigjen.
+    // Stream-on segmentet pa i ngarkuar të gjitha në memorie.
     const responseHeaders = corsHeaders({
       'Content-Type': contentType,
       'Cache-Control': 'public, max-age=3600'
@@ -133,7 +150,10 @@ export default async function handler(req) {
   } catch (error) {
     return new Response(`Gabim në Proxy: ${error.message}`, {
       status: 502,
-      headers: corsHeaders({ 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' })
+      headers: corsHeaders({
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-store'
+      })
     });
   }
 }
