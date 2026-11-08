@@ -24,6 +24,31 @@ function isAllowedStreamUrl(value) {
   }
 }
 
+function encodeProxySession(cookies) {
+  const allowedDomains = new Set(['cinesrc.st', 'bright67.online']);
+  const entries = (Array.isArray(cookies) ? cookies : [])
+    .map((cookie) => ({
+      name: cookie.name,
+      value: cookie.value,
+      domain: String(cookie.domain || '').replace(/^\\./, '').toLowerCase(),
+      path: cookie.path || '/',
+      secure: cookie.secure !== false
+    }))
+    .filter((cookie) =>
+      typeof cookie.name === 'string' &&
+      typeof cookie.value === 'string' &&
+      cookie.path.startsWith('/') &&
+      [...allowedDomains].some((domain) =>
+        cookie.domain === domain || cookie.domain.endsWith('.' + domain)
+      )
+    )
+    .slice(-40);
+
+  if (!entries.length) return '';
+  const token = Buffer.from(JSON.stringify(entries), 'utf8').toString('base64url');
+  return token.length <= 8000 ? token : '';
+}
+
 function safeUrl(value) {
   try {
     const url = new URL(value);
@@ -175,7 +200,28 @@ export default async function handler(req, res) {
     const pageReferrer = type === 'movie'
       ? `${CINESRC_ORIGIN}/embed/movie/${tmdbId}`
       : `${CINESRC_ORIGIN}/embed/tv/${tmdbId}?s=${seasonNumber}&e=${episodeNumber}`;
-    const streamUrl = `/api/proxy?ref=${encodeURIComponent(pageReferrer)}&url=${encodeURIComponent(stream.url)}`;
+
+    // Preserve the browser session that actually resolved the CineSRC player.
+    // Without its CDN cookies, bright67 may redirect every media segment back
+    // to the same "dontscrape" playlist, producing an HLS redirect loop.
+    let proxySession = '';
+    try {
+      const browserCookies = await page.browserContext().cookies();
+      proxySession = encodeProxySession(browserCookies);
+      console.info('CineSRC proxy session captured', {
+        cookieCount: browserCookies.length,
+        allowedCookieCount: proxySession ? JSON.parse(
+          Buffer.from(proxySession, 'base64url').toString('utf8')
+        ).length : 0
+      });
+    } catch (cookieError) {
+      console.warn('CineSRC browser cookie capture failed:', cookieError.message);
+    }
+
+    const sessionParam = proxySession
+      ? `&session=${encodeURIComponent(proxySession)}`
+      : '';
+    const streamUrl = `/api/proxy?ref=${encodeURIComponent(pageReferrer)}${sessionParam}&url=${encodeURIComponent(stream.url)}`;
 
     return res.status(200).json({
       success: true,
