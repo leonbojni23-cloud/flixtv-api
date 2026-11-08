@@ -12,7 +12,7 @@ function isAllowedHost(hostname) {
     .filter(Boolean);
 
   return [...DEFAULT_ALLOWED_HOSTS, ...configured].some((allowed) => {
-    const normalized = allowed.replace(/^\\.+/, '');
+    const normalized = allowed.replace(/^\.+/, '');
     return hostname === normalized || hostname.endsWith(`.${normalized}`);
   });
 }
@@ -101,8 +101,8 @@ export default async function handler(req) {
 
     const contentType = response.headers.get('content-type') || 'application/octet-stream';
     const isM3U8 =
-      /\\.m3u8(?:$|[?#])/i.test(finalUrl.href) ||
-      /mpegurl|vnd\\.apple\\.mpegurl/i.test(contentType);
+      /\.m3u8(?:$|[?#])/i.test(finalUrl.href) ||
+      /mpegurl|vnd\.apple\.mpegurl/i.test(contentType);
 
     if (isM3U8) {
       if (req.method === 'HEAD') {
