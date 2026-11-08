@@ -48,9 +48,9 @@ function sessionCookie(jar) {
   for (const byte of bytes) binary += String.fromCharCode(byte);
   const value = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
   if (value.length > 3800) {
-    return SESSION_COOKIE + '=; Path=/api/proxy; Max-Age=0; HttpOnly; Secure; SameSite=Lax';
+    return SESSION_COOKIE + '=; Path=/api/proxy; Max-Age=0; HttpOnly; Secure; SameSite=None';
   }
-  return SESSION_COOKIE + '=' + value + '; Path=/api/proxy; Max-Age=1800; HttpOnly; Secure; SameSite=Lax';
+  return SESSION_COOKIE + '=' + value + '; Path=/api/proxy; Max-Age=1800; HttpOnly; Secure; SameSite=None';
 }
 
 function withSessionCookie(response, jar) {
