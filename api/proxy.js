@@ -40,7 +40,7 @@ function restoreSession(req, jar) {
 function sessionCookie(jar) {
   const entries = [...jar.values()].slice(-30);
   if (!entries.length) {
-    return SESSION_COOKIE + '=; Path=/api/proxy; Max-Age=0; HttpOnly; Secure; SameSite=Lax';
+    return SESSION_COOKIE + '=; Path=/api/proxy; Max-Age=0; HttpOnly; Secure; SameSite=None';
   }
 
   const bytes = new TextEncoder().encode(JSON.stringify(entries));
@@ -75,22 +75,35 @@ function isAllowedHost(hostname) {
   });
 }
 
-function corsHeaders(extra = {}) {
+const ALLOWED_ORIGINS = new Set([
+  'https://flixtv-atelier-ecommerce.vercel.app',
+  'https://flixtv-snowy.vercel.app',
+  'https://flixtv-git-main-atelier-ecommerce.vercel.app'
+]);
+
+function corsHeaders(extra = {}, req = null) {
+  const origin = req?.headers?.get('origin') || '';
+  const allowedOrigin = ALLOWED_ORIGINS.has(origin)
+    ? origin
+    : 'https://flixtv-atelier-ecommerce.vercel.app';
+
   return {
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': allowedOrigin,
+    'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
     'Access-Control-Allow-Headers': 'Range, Content-Type',
+    'Vary': 'Origin',
     ...extra
   };
 }
 
-function jsonError(message, status, details = {}) {
+function jsonError(message, status, details = {}, req = null) {
   return new Response(JSON.stringify({ success: false, error: message, ...details }), {
     status,
     headers: corsHeaders({
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store'
-    })
+    }, req)
   });
 }
 
@@ -225,13 +238,13 @@ async function fetchFollowingRedirects(initialUrl, method, headers, jar) {
 
 export default async function handler(req) {
   if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: corsHeaders() });
+    return new Response(null, { status: 204, headers: corsHeaders({}, req) });
   }
 
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     return new Response('Method Not Allowed', {
       status: 405,
-      headers: corsHeaders({ Allow: 'GET, HEAD, OPTIONS' })
+      headers: corsHeaders({ Allow: 'GET, HEAD, OPTIONS' }, req)
     });
   }
 
@@ -280,7 +293,7 @@ export default async function handler(req) {
       try { await response.body?.cancel(); } catch {}
       return withSessionCookie(new Response('Burimi ktheu statusin ' + response.status, {
         status: response.status,
-        headers: corsHeaders({ 'Cache-Control': 'no-store', ...extra })
+        headers: corsHeaders({ 'Cache-Control': 'no-store', ...extra }, req)
       }), jar);
     }
 
@@ -293,7 +306,7 @@ export default async function handler(req) {
         'Kërkesa për segment video mori playlist M3U8 nga CDN. Mund të ketë skaduar URL-ja e segmentit.',
         502,
         { resource: safeResource(finalUrl), upstreamStatus: response.status }
-      ), jar);
+      , req), jar);
     }
 
     if (playlistResponse) {
@@ -304,7 +317,7 @@ export default async function handler(req) {
           headers: corsHeaders({
             'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
             'Cache-Control': 'no-store'
-          })
+          }, req)
         }), jar);
       }
 
@@ -312,7 +325,7 @@ export default async function handler(req) {
       if (!playlist.trimStart().startsWith('#EXTM3U')) {
         return withSessionCookie(jsonError('CDN deklaroi M3U8, por përmbajtja nuk është playlist HLS.', 502, {
           resource: safeResource(finalUrl)
-        }), jar);
+        }, req), jar);
       }
 
       const proxyBase = requestUrl.origin + '/api/proxy?url=';
@@ -322,14 +335,14 @@ export default async function handler(req) {
         headers: corsHeaders({
           'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
           'Cache-Control': 'no-store'
-        })
+        }, req)
       }), jar);
     }
 
     const responseHeaders = corsHeaders({
       'Content-Type': contentType,
       'Cache-Control': 'no-store'
-    });
+    }, req);
     const contentRange = response.headers.get('content-range');
     const acceptRanges = response.headers.get('accept-ranges');
     const contentLength = response.headers.get('content-length');
@@ -343,6 +356,6 @@ export default async function handler(req) {
     }), jar);
   } catch (error) {
     console.error('[CineSRC Proxy]', error.message);
-    return withSessionCookie(jsonError('Gabim në Proxy: ' + error.message, 502), jar);
+    return withSessionCookie(jsonError('Gabim në Proxy: ' + error.message, 502, {}, req), jar);
   }
 }
