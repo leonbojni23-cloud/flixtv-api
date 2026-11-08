@@ -201,7 +201,7 @@ async function sniffFmp4Segment(response, targetUrl) {
 
   const prefix = String.fromCharCode(...first.value.slice(0, 64));
   if (!/(?:ftyp|styp|moof|sidx)/.test(prefix)) {
-    const firstChunk = first.value;
+    let firstChunk = first.value;
     const body = new ReadableStream({
       async pull(controller) {
         if (firstChunk) {
