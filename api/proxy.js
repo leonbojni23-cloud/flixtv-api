@@ -187,9 +187,7 @@ async function sniffFmp4Segment(response, targetUrl) {
   // CineSRC disguises fragmented MP4 media fragments with a .jpg suffix.
   // The bytes are still ISO-BMFF (styp/moof/sidx), so expose the correct MIME
   // type to native HLS clients instead of forwarding image/jpeg.
-  let pathname = '';
-  try { pathname = new URL(targetUrl).pathname; } catch {}
-  if (!/\.jpe?g$/i.test(pathname) || !responseBody) {
+  if (!/^image\//i.test(contentType) || !responseBody) {
     return { body: responseBody, contentType };
   }
 
