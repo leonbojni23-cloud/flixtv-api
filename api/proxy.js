@@ -340,7 +340,7 @@ export default async function handler(req) {
         }, req), jar);
       }
 
-      const proxyBase = requestUrl.origin + '/api/proxy?url=';
+      const proxyBase = requestUrl.origin + '/api/proxy?ref=' + encodeURIComponent(pageReferrer) + '&url=';
       const rewritten = rewritePlaylist(playlist, finalUrl, proxyBase);
       return withSessionCookie(new Response(rewritten, {
         status: 200,
