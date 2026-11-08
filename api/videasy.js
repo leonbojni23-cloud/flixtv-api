@@ -60,7 +60,7 @@ function rewriteText(source, origin, host, contentType) {
 
   const blockLink = event => {
     const link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
-    if (link && link.target && link.target.toLowerCase() !== "_self") {
+    if (link && (link.dataset.flixBlocked === "1" || (link.target && link.target.toLowerCase() !== "_self"))) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
   };
@@ -75,7 +75,7 @@ function rewriteText(source, origin, host, contentType) {
 
   const nativeAnchorClick = HTMLAnchorElement.prototype.click;
   HTMLAnchorElement.prototype.click = function() {
-    if (this.target && this.target.toLowerCase() !== "_self") return;
+    if (this.dataset.flixBlocked === "1" || (this.target && this.target.toLowerCase() !== "_self")) return;
     return nativeAnchorClick.call(this);
   };
   const watch = new MutationObserver(records => records.forEach(record => {
@@ -84,7 +84,7 @@ function rewriteText(source, origin, host, contentType) {
       const links = [];
       if (node.matches && node.matches("a[target]")) links.push(node);
       if (node.querySelectorAll) links.push(...node.querySelectorAll("a[target]"));
-      links.forEach(link => { if (link.target.toLowerCase() !== "_self") link.removeAttribute("target"); });
+      links.forEach(link => { if (link.target.toLowerCase() !== "_self") link.dataset.flixBlocked = "1"; });
     });
   }));
   if (document.documentElement) watch.observe(document.documentElement, { childList: true, subtree: true });
