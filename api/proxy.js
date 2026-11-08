@@ -409,7 +409,9 @@ export default async function handler(req) {
         }, req), jar);
       }
 
-      const session = encodeSession(jar);\n      const proxyBase = requestUrl.origin + '/api/proxy?ref=' + encodeURIComponent(pageReferrer) +\n        (session ? '&session=' + encodeURIComponent(session) : '') + '&url=';
+      const session = encodeSession(jar);
+      const proxyBase = requestUrl.origin + '/api/proxy?ref=' + encodeURIComponent(pageReferrer) +
+        (session ? '&session=' + encodeURIComponent(session) : '') + '&url=';
       const rewritten = rewritePlaylist(playlist, finalUrl, proxyBase);
       return withSessionCookie(new Response(rewritten, {
         status: 200,
