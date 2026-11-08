@@ -49,7 +49,7 @@ function encodeSession(jar) {
   const bytes = new TextEncoder().encode(JSON.stringify(entries));
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
+  return btoa(binary).split('+').join('-').split('/').join('_').replace(/=+$/g, '');
 }
 
 function sessionCookie(jar) {
