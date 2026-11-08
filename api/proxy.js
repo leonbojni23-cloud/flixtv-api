@@ -46,7 +46,7 @@ function sessionCookie(jar) {
   const bytes = new TextEncoder().encode(JSON.stringify(entries));
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  const value = btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
+  const value = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
   if (value.length > 3800) {
     return SESSION_COOKIE + '=; Path=/api/proxy; Max-Age=0; HttpOnly; Secure; SameSite=Lax';
   }
