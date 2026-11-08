@@ -94,7 +94,6 @@ function rewriteText(source, origin, host, contentType) {
     const headMatch = output.match(/<head\b[^>]*>/i);
     if (headMatch) output = output.replace(headMatch[0], headMatch[0] + guard);
     else output = guard + output;
-    output = output.replace(/<head\b[^>]*>/i, match => match + '<base href="' + base + '">');
   } else if (/text\/css/i.test(contentType)) {
     const root = origin + "/videasy/" + host + "/";
     output = output.replace(/url\(\s*(["']?)\/(?!\/)/gi, "url($1" + root);
@@ -169,7 +168,8 @@ export default async function handler(request) {
       if (!isAllowedHost(next.hostname)) {
         return new Response("Videasy proxy: redirect te një host i jashtëm u ndalua.", { status: 502 });
       }
-      if (upstream.status === 303 || ((upstream.status === 301 || upstream.status === 302) && request.method !== "HEAD")) {
+      if (upstream.status === 303 || ((upstream.status === 301 || upstream.status === 302) && method !== "HEAD")) {
+        method = "GET";
         body = undefined;
       }
       currentUrl = next;
