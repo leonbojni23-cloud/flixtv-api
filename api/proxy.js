@@ -377,7 +377,15 @@ export default async function handler(req) {
         status: response.status,
         resource: safeResource(finalUrl),
         contentType,
-        body: upstreamBody.replace(/https?:\\/\\/[^\\s"']+/g, '[url-redacted]')
+        upstreamBodyLength: upstreamBody.length
+      });
+      const extra = contentRange ? { 'Content-Range': contentRange } : {};
+      return withSessionCookie(jsonError('Burimi refuzoi kërkesën e videos.', 502, {
+        upstreamStatus: response.status,
+        resource: safeResource(finalUrl),
+        upstreamContentType: contentType,
+        upstreamBodyLength: upstreamBody.length
+      }, req), jar);
       });
       const extra = contentRange ? { 'Content-Range': contentRange } : {};
       return withSessionCookie(jsonError('Burimi refuzoi kërkesën e videos.', 502, {
