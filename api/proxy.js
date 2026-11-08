@@ -250,17 +250,17 @@ export default async function handler(req) {
 
   const requestUrl = new URL(req.url);
   const target = requestUrl.searchParams.get('url');
-  if (!target) return jsonError('Mungon parametri url', 400);
+  if (!target) return jsonError('Mungon parametri url', 400, {}, req);
 
   let targetUrl;
   try {
     targetUrl = new URL(target);
   } catch {
-    return jsonError('URL e pavlefshme', 400);
+    return jsonError('URL e pavlefshme', 400, {}, req);
   }
 
   if (targetUrl.protocol !== 'https:' || !isAllowedHost(targetUrl.hostname.toLowerCase())) {
-    return jsonError('Host-i i burimit nuk lejohet', 403);
+    return jsonError('Host-i i burimit nuk lejohet', 403, {}, req);
   }
 
   const jar = new Map();
@@ -305,8 +305,8 @@ export default async function handler(req) {
       return withSessionCookie(jsonError(
         'Kërkesa për segment video mori playlist M3U8 nga CDN. Mund të ketë skaduar URL-ja e segmentit.',
         502,
-        { resource: safeResource(finalUrl), upstreamStatus: response.status }
-      , req), jar);
+        { resource: safeResource(finalUrl), upstreamStatus: response.status }, req
+      ), jar);
     }
 
     if (playlistResponse) {
