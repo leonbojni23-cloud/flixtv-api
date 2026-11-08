@@ -189,7 +189,7 @@ async function sniffFmp4Segment(response, targetUrl) {
   // type to native HLS clients instead of forwarding image/jpeg.
   let pathname = '';
   try { pathname = new URL(targetUrl).pathname; } catch {}
-  if (!/\\.jpe?g$/i.test(pathname) || !responseBody) {
+  if (!/\.jpe?g$/i.test(pathname) || !responseBody) {
     return { body: responseBody, contentType };
   }
 
