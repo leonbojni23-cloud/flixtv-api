@@ -285,10 +285,10 @@ export default async function handler(req, res) {
     let stream = firstResult.stream;
 
     if (!stream) {
+      if (firstResult.streamError) throw firstResult.streamError;
       // If autoplay did not issue the HLS request by DOMContentLoaded,
       // make one short, bounded attempt to start the embed's play control.
       await triggerPlayback(page);
-      if (firstResult.streamError) throw firstResult.streamError;
       const finalResult = await streamResult;
       if (finalResult.streamError) throw finalResult.streamError;
       stream = finalResult.stream;
