@@ -153,6 +153,47 @@ function waitForM3U8(page, timeoutMs) {
   });
 }
 
+
+async function triggerPlayback(page) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await Promise.all(page.frames().map(async (frame) => {
+      try {
+        await frame.evaluate(() => {
+          const video = document.querySelector('video');
+          if (video) {
+            video.muted = true;
+            const play = video.play();
+            if (play && typeof play.catch === 'function') play.catch(() => {});
+          }
+
+          const buttons = Array.from(document.querySelectorAll(
+            'button, [role="button"], .vjs-big-play-button, .plyr__control--overlaid'
+          ));
+          const playButton = buttons.find((element) => {
+            const label = [
+              element.innerText,
+              element.getAttribute('aria-label'),
+              element.getAttribute('title'),
+              typeof element.className === 'string' ? element.className : ''
+            ].filter(Boolean).join(' ').toLowerCase();
+
+            if (!/\b(play|watch|start|luaj)\b/.test(label)) return false;
+            if (/\b(pause|trailer|skip)\b/.test(label)) return false;
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          });
+
+          if (playButton) playButton.click();
+        });
+      } catch {
+        // A frame can still be loading or disappear while the player starts.
+      }
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 180));
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -267,6 +308,9 @@ export default async function handler(req, res) {
     let stream = firstResult.stream;
 
     if (!stream) {
+      // If autoplay did not issue the HLS request by DOMContentLoaded,
+      // make one short, bounded attempt to start the embed's play control.
+      await triggerPlayback(page);
       if (firstResult.streamError) throw firstResult.streamError;
       const finalResult = await streamResult;
       if (finalResult.streamError) throw finalResult.streamError;
