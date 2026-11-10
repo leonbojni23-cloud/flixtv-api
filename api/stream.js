@@ -9,8 +9,8 @@ export const config = {
 
 const CINESRC_ORIGIN = 'https://cinesrc.st';
 const ALLOWED_STREAM_HOSTS = ['cinesrc.st', 'bright67.online'];
-const NAVIGATION_TIMEOUT_MS = 12000;
-const STREAM_WAIT_TIMEOUT_MS = 18000;
+const NAVIGATION_TIMEOUT_MS = 9000;
+const STREAM_WAIT_TIMEOUT_MS = 12000;
 
 function isAllowedStreamUrl(value) {
   try {
@@ -22,31 +22,6 @@ function isAllowedStreamUrl(value) {
   } catch {
     return false;
   }
-}
-
-function encodeProxySession(cookies) {
-  const allowedDomains = new Set(['cinesrc.st', 'bright67.online']);
-  const entries = (Array.isArray(cookies) ? cookies : [])
-    .map((cookie) => ({
-      name: cookie.name,
-      value: cookie.value,
-      domain: String(cookie.domain || '').replace(/^\\./, '').toLowerCase(),
-      path: cookie.path || '/',
-      secure: cookie.secure !== false
-    }))
-    .filter((cookie) =>
-      typeof cookie.name === 'string' &&
-      typeof cookie.value === 'string' &&
-      cookie.path.startsWith('/') &&
-      [...allowedDomains].some((domain) =>
-        cookie.domain === domain || cookie.domain.endsWith('.' + domain)
-      )
-    )
-    .slice(-40);
-
-  if (!entries.length) return '';
-  const token = Buffer.from(JSON.stringify(entries), 'utf8').toString('base64url');
-  return token.length <= 8000 ? token : '';
 }
 
 function safeUrl(value) {
@@ -178,47 +153,6 @@ function waitForM3U8(page, timeoutMs) {
   });
 }
 
-async function triggerPlayback(page) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const frames = page.frames();
-    await Promise.all(frames.map(async (frame) => {
-      try {
-        await frame.evaluate(() => {
-          const video = document.querySelector('video');
-          if (video) {
-            video.muted = true;
-            video.autoplay = true;
-            const playback = video.play();
-            if (playback && typeof playback.catch === 'function') playback.catch(() => {});
-          }
-
-          const controls = Array.from(document.querySelectorAll(
-            'button, [role="button"], .vjs-big-play-button, .plyr__control--overlaid'
-          ));
-          const playControl = controls.find((element) => {
-            const label = [
-              element.innerText,
-              element.getAttribute('aria-label'),
-              element.getAttribute('title'),
-              typeof element.className === 'string' ? element.className : ''
-            ].filter(Boolean).join(' ').toLowerCase();
-
-            if (!/\b(play|watch|start|luaj)\b/.test(label)) return false;
-            if (/\b(pause|trailer|skip)\b/.test(label)) return false;
-
-            const rect = element.getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0;
-          });
-
-          if (playControl) playControl.click();
-        });
-      } catch {}
-    }));
-
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-}
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -281,62 +215,45 @@ export default async function handler(req, res) {
   const targetUrl = target.href;
 
   let browser;
+  let context;
   let page;
 
   try {
     browser = await getBrowser();
-    page = await browser.newPage();
+    context = await browser.createBrowserContext();
+    page = await context.newPage();
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
     await page.setUserAgent(
       'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
     );
 
-    // Përgjimi fillon PARA navigimit që të mos humbasim manifestin e parë.
-    const streamPromise = waitForM3U8(page, STREAM_WAIT_TIMEOUT_MS);
+    // Start listening before navigation. Return as soon as the master
+    // playlist is observed; do not wait for the entire embed page to settle.
+    const streamResult = waitForM3U8(page, STREAM_WAIT_TIMEOUT_MS)
+      .then((stream) => ({ stream }))
+      .catch((error) => ({ streamError: error }));
 
-    try {
-      await page.goto(targetUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: NAVIGATION_TIMEOUT_MS
-      });
-    } catch (navigationError) {
-      // Një navigim mund të përfundojë me timeout edhe kur player-i
-      // ka nisur tashmë kërkesat. Lëmë përgjimin të vendosë rezultatin.
-      console.warn('CineSRC navigation warning:', navigationError.message);
+    const navigationResult = page.goto(targetUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: NAVIGATION_TIMEOUT_MS
+    }).then(() => ({ navigated: true })).catch((error) => {
+      console.warn('CineSRC navigation warning:', error.message);
+      return { navigationError: error.message };
+    });
+
+    const firstResult = await Promise.race([streamResult, navigationResult]);
+    let stream = firstResult.stream;
+
+    if (!stream) {
+      if (firstResult.streamError) throw firstResult.streamError;
+      const finalResult = await streamResult;
+      if (finalResult.streamError) throw finalResult.streamError;
+      stream = finalResult.stream;
     }
-
-    await triggerPlayback(page);
-    const stream = await streamPromise;
 
     if (!isAllowedStreamUrl(stream.url)) {
       throw new Error('URL e stream-it nuk kaloi kontrollin e host-it.');
     }
-
-    const pageReferrer = type === 'movie'
-      ? `${CINESRC_ORIGIN}/embed/movie/${tmdbId}`
-      : `${CINESRC_ORIGIN}/embed/tv/${tmdbId}?s=${seasonNumber}&e=${episodeNumber}`;
-
-    // Preserve the browser session that actually resolved the CineSRC player.
-    // Without its CDN cookies, bright67 may redirect every media segment back
-    // to the same "dontscrape" playlist, producing an HLS redirect loop.
-    let proxySession = '';
-    try {
-      const browserCookies = await page.browserContext().cookies();
-      proxySession = encodeProxySession(browserCookies);
-      console.info('CineSRC proxy session captured', {
-        cookieCount: browserCookies.length,
-        allowedCookieCount: proxySession ? JSON.parse(
-          Buffer.from(proxySession, 'base64url').toString('utf8')
-        ).length : 0
-      });
-    } catch (cookieError) {
-      console.warn('CineSRC browser cookie capture failed:', cookieError.message);
-    }
-
-    const sessionParam = proxySession
-      ? `&session=${encodeURIComponent(proxySession)}`
-      : '';
-    const streamUrl = `/api/proxy?ref=${encodeURIComponent(pageReferrer)}${sessionParam}&url=${encodeURIComponent(stream.url)}`;
 
     return res.status(200).json({
       success: true,
@@ -345,7 +262,6 @@ export default async function handler(req, res) {
       masterUrl: stream.url,
       playlistType: stream.playlistType,
       qualities: stream.qualities,
-      streamUrl,
       detected: {
         status: stream.status,
         contentType: stream.contentType,
@@ -360,11 +276,8 @@ export default async function handler(req, res) {
       error: error.message
     });
   } finally {
-    if (page && !page.isClosed()) {
-      try { await page.close(); } catch {}
-    }
-    if (browser) {
-      try { await browser.close(); } catch {}
+    if (context) {
+      try { await context.close(); } catch {}
     }
   }
 }
