@@ -246,6 +246,55 @@ function waitForM3U8(page, timeoutMs) {
   });
 }
 
+
+async function navigateCineSrc(page, targetUrl) {
+  const navigate = () => page.goto(targetUrl, {
+    waitUntil: 'domcontentloaded',
+    timeout: NAVIGATION_TIMEOUT_MS
+  });
+
+  try {
+    await navigate();
+    return { ok: true, retried: false };
+  } catch (error) {
+    const message = String(error?.message || error);
+    const recoverable = /navigating frame was detached|requesting main frame too early|target closed|frame detached/i.test(message);
+
+    console.warn('[CineSRC resolver] Navigation warning', message);
+
+    if (!recoverable) {
+      return { ok: false, retried: false, error: message };
+    }
+
+    // Puppeteer can lose the main frame when the embed performs an early
+    // redirect/replace. Reinitialize that frame before retrying the same URL.
+    await new Promise((resolve) => setTimeout(resolve, 180));
+
+    try {
+      await page.goto('about:blank', {
+        waitUntil: 'load',
+        timeout: 3500
+      });
+    } catch (resetError) {
+      console.warn('[CineSRC resolver] Main-frame reset warning', resetError?.message || resetError);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    try {
+      await page.goto(targetUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: NAVIGATION_TIMEOUT_MS
+      });
+      console.info('[CineSRC resolver] Main-frame navigation recovered');
+      return { ok: true, retried: true };
+    } catch (retryError) {
+      console.warn('[CineSRC resolver] Navigation retry failed', retryError?.message || retryError);
+      return { ok: false, retried: true, error: String(retryError?.message || retryError) };
+    }
+  }
+}
+
 async function triggerPlayback(page, isStreamFound = () => false) {
   const deadline = Date.now() + 7000;
 
@@ -375,9 +424,10 @@ export default async function handler(req, res) {
     await page.setUserAgent(
       'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
     );
+    await page.setViewport({ width: 1280, height: 720 });
+    await page.setCacheEnabled(false);
 
-    // Ensure Puppeteer has attached its initial about:blank main frame
-    // before navigating. This avoids intermittent "main frame too early".
+    // Ensure the initial about:blank main frame is initialized.
     await page.evaluate(() => document.readyState);
 
     // Begin network capture before loading the embed.
@@ -389,20 +439,15 @@ export default async function handler(req, res) {
       })
       .catch((error) => ({ streamError: error }));
 
-    const navigationResult = page.goto(targetUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: NAVIGATION_TIMEOUT_MS
-    }).then(() => ({ navigated: true })).catch((navigationError) => {
-      console.warn('[CineSRC resolver] Navigation warning', navigationError.message);
-      return { navigationError: navigationError.message };
-    });
+    const navigationResult = navigateCineSrc(page, targetUrl)
+      .then((result) => ({ navigation: result }));
 
     const firstResult = await Promise.race([streamResult, navigationResult]);
     let stream = firstResult.stream;
 
     if (!stream && !firstResult.streamError) {
       // The embed's nested video/player may appear after DOMContentLoaded.
-      // Poll its frames for up to seven seconds, not just three quick attempts.
+      // Poll its frames while the network listener remains active.
       await triggerPlayback(page, () => streamFound);
       const finalResult = await streamResult;
       if (finalResult.streamError) throw finalResult.streamError;
