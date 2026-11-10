@@ -248,12 +248,10 @@ export default async function handler(req, res) {
   const path = type === 'movie'
     ? `/embed/movie/${tmdbId}`
     : `/embed/tv/${tmdbId}?s=${seasonNumber}&e=${episodeNumber}`;
-  const target = new URL(path, CINESRC_ORIGIN);
-  target.searchParams.set('autoplay', 'true');
-  target.searchParams.set('muted', 'true');
-  target.searchParams.set('controls', 'true');
-  target.searchParams.set('autonext', 'false');
-  const targetUrl = target.href;
+  // Use the exact embed URL that was proven to resolve on the laptop.
+  // Do not append undocumented player query parameters; they can change
+  // CineSRC's initialization path and prevent its HLS request from starting.
+  const targetUrl = new URL(path, CINESRC_ORIGIN).href;
 
   let browser;
   let page;
