@@ -399,9 +399,8 @@ export default async function handler(req, res) {
     });
   }
 
-  // Tokenët e playlist-it mund të jenë jetëshkurtër. Mos cache-o përgjigjen.
-  res.setHeader('Cache-Control', 'no-store, max-age=0');
-  res.setHeader('Vary', 'Origin');
+  // Cache key includes the media query (TMDB ID/type/season/episode).
+  // Vercel keeps the successful M3U8 response for four hours.
 
   const path = type === 'movie'
     ? `/embed/movie/${tmdbId}`
@@ -453,6 +452,9 @@ export default async function handler(req, res) {
       throw new Error('URL e stream-it nuk kaloi kontrollin e host-it.');
     }
 
+    res.setHeader('Vercel-CDN-Cache-Control', 'public, s-maxage=14400');
+    res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+
     return res.status(200).json({
       success: true,
       source: 'cinesrc',
@@ -467,6 +469,7 @@ export default async function handler(req, res) {
       }
     });
   } catch (error) {
+    res.setHeader('Cache-Control', 'no-store');
     console.error('CineSRC Puppeteer resolver error:', error.message);
     return res.status(502).json({
       success: false,
