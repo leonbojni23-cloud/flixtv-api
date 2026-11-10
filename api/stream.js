@@ -247,54 +247,76 @@ function waitForM3U8(page, timeoutMs) {
 }
 
 
-async function navigateCineSrc(page, targetUrl) {
-  const navigate = () => page.goto(targetUrl, {
-    waitUntil: 'domcontentloaded',
-    timeout: NAVIGATION_TIMEOUT_MS
-  });
+async function prepareCineSrcPage(browser) {
+  const page = await browser.newPage();
+  page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
+  await page.setUserAgent(
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
+  );
+  await page.setViewport({ width: 1280, height: 720 });
+  await page.setCacheEnabled(false);
 
+  // Wait until Puppeteer has attached the initial main frame.
+  await page.evaluate(() => document.readyState);
+  return page;
+}
+
+async function navigateCineSrc(page, targetUrl) {
   try {
-    await navigate();
-    return { ok: true, retried: false };
+    await page.goto(targetUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: NAVIGATION_TIMEOUT_MS
+    });
+    return { ok: true, retryWithNewPage: false };
   } catch (error) {
     const message = String(error?.message || error);
-    const recoverable = /navigating frame was detached|requesting main frame too early|target closed|frame detached/i.test(message);
+    const retryWithNewPage =
+      /navigating frame was detached|requesting main frame too early|target closed|frame detached|attempted to use detached frame/i.test(message);
 
     console.warn('[CineSRC resolver] Navigation warning', message);
-
-    if (!recoverable) {
-      return { ok: false, retried: false, error: message };
-    }
-
-    // Puppeteer can lose the main frame when the embed performs an early
-    // redirect/replace. Reinitialize that frame before retrying the same URL.
-    await new Promise((resolve) => setTimeout(resolve, 180));
-
-    try {
-      await page.goto('about:blank', {
-        waitUntil: 'load',
-        timeout: 3500
-      });
-    } catch (resetError) {
-      console.warn('[CineSRC resolver] Main-frame reset warning', resetError?.message || resetError);
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 120));
-
-    try {
-      await page.goto(targetUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: NAVIGATION_TIMEOUT_MS
-      });
-      console.info('[CineSRC resolver] Main-frame navigation recovered');
-      return { ok: true, retried: true };
-    } catch (retryError) {
-      console.warn('[CineSRC resolver] Navigation retry failed', retryError?.message || retryError);
-      return { ok: false, retried: true, error: String(retryError?.message || retryError) };
-    }
+    return {
+      ok: false,
+      retryWithNewPage,
+      error: message
+    };
   }
 }
 
+async function resolveOnPage(page, targetUrl) {
+  let streamFound = false;
+  const streamPromise = waitForM3U8(page, STREAM_WAIT_TIMEOUT_MS)
+    .then((stream) => {
+      streamFound = true;
+      return { stream };
+    })
+    .catch((error) => ({ streamError: error }));
+
+  // The listener is active before navigation starts.
+  const navigation = await navigateCineSrc(page, targetUrl);
+
+  if (navigation.retryWithNewPage) {
+    // Do not attempt to recover a detached Frame using the same Page object.
+    const pending = await Promise.race([
+      streamPromise,
+      new Promise((resolve) => setTimeout(() => resolve({}), 200))
+    ]);
+    if (pending.stream) return { stream: pending.stream };
+    return { retryWithNewPage: true, error: navigation.error };
+  }
+
+  if (!streamFound) {
+    await triggerPlayback(page, () => streamFound);
+  }
+
+  const finalResult = await streamPromise;
+  if (finalResult.streamError) {
+    return {
+      error: finalResult.streamError.message || 'M3U8 was not detected',
+      retryWithNewPage: false
+    };
+  }
+  return { stream: finalResult.stream };
+}
 async function triggerPlayback(page, isStreamFound = () => false) {
   const deadline = Date.now() + 7000;
 
@@ -418,44 +440,37 @@ export default async function handler(req, res) {
 
   try {
     browser = await getBrowser();
-    page = await browser.newPage();
 
-    page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-    await page.setUserAgent(
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
-    );
-    await page.setViewport({ width: 1280, height: 720 });
-    await page.setCacheEnabled(false);
+    let stream = null;
+    let lastResolveError = 'CineSRC did not return an M3U8 playlist.';
+    const maxAttempts = 2;
 
-    // Ensure the initial about:blank main frame is initialized.
-    await page.evaluate(() => document.readyState);
+    for (let attempt = 1; attempt <= maxAttempts && !stream; attempt += 1) {
+      page = await prepareCineSrcPage(browser);
+      console.info('[CineSRC resolver] Starting page attempt', { attempt, tmdbId, type });
 
-    // Begin network capture before loading the embed.
-    let streamFound = false;
-    const streamResult = waitForM3U8(page, STREAM_WAIT_TIMEOUT_MS)
-      .then((stream) => {
-        streamFound = true;
-        return { stream };
-      })
-      .catch((error) => ({ streamError: error }));
+      const attemptResult = await resolveOnPage(page, targetUrl);
+      stream = attemptResult.stream || null;
+      lastResolveError = attemptResult.error || lastResolveError;
 
-    const navigationResult = navigateCineSrc(page, targetUrl)
-      .then((result) => ({ navigation: result }));
+      if (stream) break;
 
-    const firstResult = await Promise.race([streamResult, navigationResult]);
-    let stream = firstResult.stream;
-
-    if (!stream && !firstResult.streamError) {
-      // The embed's nested video/player may appear after DOMContentLoaded.
-      // Poll its frames while the network listener remains active.
-      await triggerPlayback(page, () => streamFound);
-      const finalResult = await streamResult;
-      if (finalResult.streamError) throw finalResult.streamError;
-      stream = finalResult.stream;
+      const needsFreshPage = attemptResult.retryWithNewPage;
+      if (attempt < maxAttempts && (needsFreshPage || attemptResult.error)) {
+        console.warn('[CineSRC resolver] Retrying with a fresh Page', {
+          attempt,
+          reason: lastResolveError
+        });
+        if (page && !page.isClosed()) {
+          try { await page.close(); } catch {}
+        }
+        page = null;
+        continue;
+      }
     }
 
-    if (!stream && firstResult.streamError) {
-      throw firstResult.streamError;
+    if (!stream) {
+      throw new Error(lastResolveError);
     }
 
     if (!isAllowedStreamUrl(stream.url)) {
