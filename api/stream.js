@@ -67,13 +67,72 @@ function positiveInteger(value, label) {
   return parsed;
 }
 
+function parseMasterPlaylist(source, manifestUrl) {
+  const lines = String(source || '').replace(/^\uFEFF/, '').split(/\r?\n/);
+  const variants = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (!/^#EXT-X-STREAM-INF:/i.test(line)) continue;
+
+    const attributeText = line.slice(line.indexOf(':') + 1);
+    const attributes = {};
+    for (const match of attributeText.matchAll(/([A-Z0-9-]+)=("[^"]*"|[^,]*)/gi)) {
+      attributes[match[1].toUpperCase()] = String(match[2] || '').replace(/^"|"$/g, '');
+    }
+
+    let variantPath = '';
+    for (let next = index + 1; next < lines.length; next += 1) {
+      const candidate = lines[next].trim();
+      if (candidate && !candidate.startsWith('#')) {
+        variantPath = candidate;
+        index = next;
+        break;
+      }
+    }
+    if (!variantPath) continue;
+
+    let url;
+    try {
+      url = new URL(variantPath, manifestUrl).href;
+    } catch {
+      continue;
+    }
+
+    const resolution = String(attributes.RESOLUTION || '').match(/^(\d+)x(\d+)$/i);
+    const width = resolution ? Number(resolution[1]) : null;
+    const height = resolution ? Number(resolution[2]) : null;
+    const bandwidth = Number(attributes.BANDWIDTH || 0);
+    const label = attributes.NAME || (height ? String(height) + 'p' : 'Variant ' + (variants.length + 1));
+
+    variants.push({ label, width, height, bandwidth, url });
+  }
+
+  return variants.sort((a, b) =>
+    (Number(b.height || 0) - Number(a.height || 0)) ||
+    (Number(b.bandwidth || 0) - Number(a.bandwidth || 0))
+  );
+}
+
 function waitForM3U8(page, timeoutMs) {
   let timer;
+  let settleTimer;
+  let candidate = null;
+  let settled = false;
 
-  const promise = new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const cleanup = () => {
       clearTimeout(timer);
+      clearTimeout(settleTimer);
       page.off('response', onResponse);
+    };
+
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve(value);
     };
 
     const onResponse = (response) => {
@@ -89,25 +148,75 @@ function waitForM3U8(page, timeoutMs) {
         if (!looksLikePlaylist || status < 200 || status >= 300) return;
         if (!isAllowedStreamUrl(url)) return;
 
-        cleanup();
-        resolve({
+        const body = await response.text().catch(() => '');
+        const qualities = parseMasterPlaylist(body, url);
+        const result = {
           url,
           status,
-          contentType: contentType || 'unknown'
-        });
-      })().catch(() => {
-        // Një përgjigje e vetme e keqe nuk duhet të ndalojë përgjimin.
-      });
+          contentType: contentType || 'unknown',
+          playlistType: qualities.length ? 'master' : 'media',
+          qualities
+        };
+
+        if (qualities.length) {
+          finish(null, result);
+          return;
+        }
+
+        if (!candidate) {
+          candidate = result;
+          settleTimer = setTimeout(() => finish(null, candidate), 1400);
+        }
+      })().catch(() => {});
     };
 
     page.on('response', onResponse);
     timer = setTimeout(() => {
-      cleanup();
-      reject(new Error('Timeout: player-i nuk ngarkoi një M3U8 brenda afatit.'));
+      if (candidate) finish(null, candidate);
+      else finish(new Error('Timeout: player-i nuk ngarkoi një M3U8 brenda afatit.'));
     }, timeoutMs);
   });
+}
 
-  return promise;
+async function triggerPlayback(page) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const frames = page.frames();
+    await Promise.all(frames.map(async (frame) => {
+      try {
+        await frame.evaluate(() => {
+          const video = document.querySelector('video');
+          if (video) {
+            video.muted = true;
+            video.autoplay = true;
+            const playback = video.play();
+            if (playback && typeof playback.catch === 'function') playback.catch(() => {});
+          }
+
+          const controls = Array.from(document.querySelectorAll(
+            'button, [role="button"], .vjs-big-play-button, .plyr__control--overlaid'
+          ));
+          const playControl = controls.find((element) => {
+            const label = [
+              element.innerText,
+              element.getAttribute('aria-label'),
+              element.getAttribute('title'),
+              typeof element.className === 'string' ? element.className : ''
+            ].filter(Boolean).join(' ').toLowerCase();
+
+            if (!/\b(play|watch|start|luaj)\b/.test(label)) return false;
+            if (/\b(pause|trailer|skip)\b/.test(label)) return false;
+
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          });
+
+          if (playControl) playControl.click();
+        });
+      } catch {}
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
 
 export default async function handler(req, res) {
@@ -164,7 +273,12 @@ export default async function handler(req, res) {
   const path = type === 'movie'
     ? `/embed/movie/${tmdbId}`
     : `/embed/tv/${tmdbId}?s=${seasonNumber}&e=${episodeNumber}`;
-  const targetUrl = new URL(path, CINESRC_ORIGIN).href;
+  const target = new URL(path, CINESRC_ORIGIN);
+  target.searchParams.set('autoplay', 'true');
+  target.searchParams.set('muted', 'true');
+  target.searchParams.set('controls', 'true');
+  target.searchParams.set('autonext', 'false');
+  const targetUrl = target.href;
 
   let browser;
   let page;
@@ -191,6 +305,7 @@ export default async function handler(req, res) {
       console.warn('CineSRC navigation warning:', navigationError.message);
     }
 
+    await triggerPlayback(page);
     const stream = await streamPromise;
 
     if (!isAllowedStreamUrl(stream.url)) {
@@ -227,6 +342,9 @@ export default async function handler(req, res) {
       success: true,
       source: 'cinesrc',
       format: 'hls',
+      masterUrl: stream.url,
+      playlistType: stream.playlistType,
+      qualities: stream.qualities,
       streamUrl,
       detected: {
         status: stream.status,
