@@ -24,6 +24,31 @@ function isAllowedStreamUrl(value) {
   }
 }
 
+function encodeProxySession(cookies) {
+  const allowedDomains = new Set(['cinesrc.st', 'bright67.online']);
+  const entries = (Array.isArray(cookies) ? cookies : [])
+    .map((cookie) => ({
+      name: cookie.name,
+      value: cookie.value,
+      domain: String(cookie.domain || '').replace(/^\\./, '').toLowerCase(),
+      path: cookie.path || '/',
+      secure: cookie.secure !== false
+    }))
+    .filter((cookie) =>
+      typeof cookie.name === 'string' &&
+      typeof cookie.value === 'string' &&
+      cookie.path.startsWith('/') &&
+      [...allowedDomains].some((domain) =>
+        cookie.domain === domain || cookie.domain.endsWith('.' + domain)
+      )
+    )
+    .slice(-40);
+
+  if (!entries.length) return '';
+  const token = Buffer.from(JSON.stringify(entries), 'utf8').toString('base64url');
+  return token.length <= 8000 ? token : '';
+}
+
 function safeUrl(value) {
   try {
     const url = new URL(value);
@@ -296,11 +321,33 @@ export default async function handler(req, res) {
       throw new Error('URL e stream-it nuk kaloi kontrollin e host-it.');
     }
 
+    // The direct master URL is returned unchanged. Some CineSRC/CDN sessions
+    // also require browser cookies and the original Referer for child playlists
+    // and media segments, so provide a compatible proxy URL as a fallback only.
+    const pageReferrer = type === 'movie'
+      ? `${CINESRC_ORIGIN}/embed/movie/${tmdbId}`
+      : `${CINESRC_ORIGIN}/embed/tv/${tmdbId}?s=${seasonNumber}&e=${episodeNumber}`;
+
+    let proxySession = '';
+    try {
+      proxySession = encodeProxySession(await page.browserContext().cookies());
+    } catch (cookieError) {
+      console.warn('CineSRC browser cookie capture failed:', cookieError.message);
+    }
+
+    const sessionParam = proxySession
+      ? '&session=' + encodeURIComponent(proxySession)
+      : '';
+    const streamUrl = '/api/proxy?ref=' + encodeURIComponent(pageReferrer) +
+      sessionParam + '&url=' + encodeURIComponent(stream.url);
+
     return res.status(200).json({
       success: true,
       source: 'cinesrc',
       format: 'hls',
       masterUrl: stream.url,
+      // Used only if the direct master is rejected by the CDN/session policy.
+      streamUrl,
       playlistType: stream.playlistType,
       qualities: stream.qualities,
       detected: {
