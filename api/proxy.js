@@ -20,11 +20,15 @@ function decodeSession(value, jar) {
           typeof item.value !== 'string' ||
           typeof item.domain !== 'string' ||
           typeof item.path !== 'string') continue;
-      if (!isAllowedHost(item.domain) || !item.path.startsWith('/')) continue;
-      jar.set(item.name + '@' + item.domain + item.path, {
+
+      // Chromium stores some cookies with a leading dot in the Domain field.
+      // Normalize it before matching hosts or constructing the Cookie header.
+      const domain = item.domain.replace(/^\./, '').toLowerCase();
+      if (!isAllowedHost(domain) || !item.path.startsWith('/')) continue;
+      jar.set(item.name + '@' + domain + item.path, {
         name: item.name,
         value: item.value,
-        domain: item.domain,
+        domain,
         path: item.path,
         secure: item.secure !== false
       });
