@@ -376,6 +376,38 @@ async function triggerPlayback(page, isStreamFound = () => false) {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 }
+
+async function waitForCineSrcCdnSession(page, timeoutMs = 2200) {
+  const getCookies = () => page.browserContext().cookies();
+
+  const hasCdnCookie = (cookies) => (cookies || []).some((cookie) => {
+    const domain = String(cookie.domain || '').replace(/^\./, '').toLowerCase();
+    return domain === 'bright67.online' || domain.endsWith('.bright67.online');
+  });
+
+  let cookies = await getCookies().catch(() => []);
+  if (hasCdnCookie(cookies)) return cookies;
+
+  // The master playlist is only the first stage. Let the CineSRC player load
+  // its child playlist/media endpoint so the CDN can issue its session cookie.
+  try {
+    await page.waitForResponse((response) => {
+      try {
+        const hostname = new URL(response.url()).hostname.toLowerCase();
+        return (hostname === 'bright67.online' || hostname.endsWith('.bright67.online')) &&
+          response.status() < 500;
+      } catch {
+        return false;
+      }
+    }, { timeout: timeoutMs });
+  } catch {
+    // A provider may serve media on cinesrc.st or may not issue a CDN cookie.
+  }
+
+  cookies = await getCookies().catch(() => cookies);
+  return cookies;
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -486,7 +518,22 @@ export default async function handler(req, res) {
 
     let proxySession = '';
     try {
-      proxySession = encodeProxySession(await page.browserContext().cookies());
+      const browserCookies = await waitForCineSrcCdnSession(page, 2200);
+      proxySession = encodeProxySession(browserCookies);
+      const sessionEntries = proxySession
+        ? JSON.parse(Buffer.from(proxySession, 'base64url').toString('utf8'))
+        : [];
+      const sessionDomains = [...new Set(sessionEntries.map((cookie) => cookie.domain))];
+      const cdnCookieCount = sessionEntries.filter((cookie) =>
+        cookie.domain === 'bright67.online' || cookie.domain.endsWith('.bright67.online')
+      ).length;
+
+      console.info('[CineSRC resolver] Captured playback session', {
+        browserCookieCount: browserCookies.length,
+        sessionCookieCount: sessionEntries.length,
+        cdnCookieCount,
+        sessionDomains
+      });
     } catch (cookieError) {
       console.warn('CineSRC browser cookie capture failed:', cookieError.message);
     }
