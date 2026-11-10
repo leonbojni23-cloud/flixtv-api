@@ -82,6 +82,49 @@ function withSessionCookie(response, jar) {
   });
 }
 
+function decodeProxyHeaders(value) {
+  if (!value || typeof value !== 'string' || value.length > 5000) return {};
+  try {
+    const binary = atob(value.replace(/-/g, '+').replace(/_/g, '/'));
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    const parsed = JSON.parse(new TextDecoder().decode(bytes));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+    const result = {};
+    const clean = (input, maxLength) => {
+      if (typeof input !== 'string' || input.length > maxLength || /[\\r\\n]/.test(input)) return '';
+      return input.trim();
+    };
+
+    const userAgent = clean(parsed.userAgent, 512);
+    const accept = clean(parsed.accept, 512);
+    const acceptLanguage = clean(parsed.acceptLanguage, 256);
+    if (userAgent) result.userAgent = userAgent;
+    if (accept) result.accept = accept;
+    if (acceptLanguage) result.acceptLanguage = acceptLanguage;
+
+    try {
+      const referer = new URL(clean(parsed.referer, 2048));
+      if (referer.protocol === 'https:' &&
+          (referer.hostname === 'cinesrc.st' || referer.hostname.endsWith('.cinesrc.st'))) {
+        result.referer = referer.href;
+      }
+    } catch {}
+
+    try {
+      const origin = new URL(clean(parsed.origin, 512));
+      if (origin.protocol === 'https:' &&
+          (origin.hostname === 'cinesrc.st' || origin.hostname.endsWith('.cinesrc.st'))) {
+        result.origin = origin.origin;
+      }
+    } catch {}
+
+    return result;
+  } catch {
+    return {};
+  }
+}
+
 function isAllowedHost(hostname) {
   const configured = (process.env.PROXY_ALLOWED_HOSTS || '')
     .split(',')
@@ -338,11 +381,11 @@ export default async function handler(req) {
 
   const jar = new Map();
   restoreSession(req, jar, requestUrl.searchParams.get('session'));
+  const capturedHeaders = decodeProxyHeaders(requestUrl.searchParams.get('headers'));
 
-  // Use the actual CineSRC embed page as the upstream referrer. Some CDN
-  // edges reject requests carrying only the site's homepage as Referer.
+  // Prefer the exact Referer/Origin observed in CineSRC's own CDN request.
   let pageReferrer = 'https://cinesrc.st/';
-  const requestedReferrer = requestUrl.searchParams.get('ref');
+  const requestedReferrer = capturedHeaders.referer || requestUrl.searchParams.get('ref');
   if (requestedReferrer) {
     try {
       const parsedReferrer = new URL(requestedReferrer);
@@ -355,11 +398,12 @@ export default async function handler(req) {
 
   try {
     const upstreamHeaders = new Headers({
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-      'Accept': '*/*',
-      'Accept-Language': 'en-US,en;q=0.9',
+      'User-Agent': capturedHeaders.userAgent ||
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+      'Accept': capturedHeaders.accept || '*/*',
+      'Accept-Language': capturedHeaders.acceptLanguage || 'en-US,en;q=0.9',
       'Referer': pageReferrer,
-      'Origin': 'https://cinesrc.st'
+      'Origin': capturedHeaders.origin || 'https://cinesrc.st'
     });
 
     const range = req.headers.get('range');
@@ -428,8 +472,10 @@ export default async function handler(req) {
       }
 
       const session = encodeSession(jar);
+      const headerToken = requestUrl.searchParams.get('headers') || '';
       const proxyBase = requestUrl.origin + '/api/proxy?ref=' + encodeURIComponent(pageReferrer) +
-        (session ? '&session=' + encodeURIComponent(session) : '') + '&url=';
+        (session ? '&session=' + encodeURIComponent(session) : '') +
+        (headerToken ? '&headers=' + encodeURIComponent(headerToken) : '') + '&url=';
       const rewritten = rewritePlaylist(playlist, finalUrl, proxyBase);
       return withSessionCookie(new Response(rewritten, {
         status: 200,
@@ -443,14 +489,16 @@ export default async function handler(req) {
     const normalizedSegment = await sniffFmp4Segment(response, targetUrl.href);
     const responseHeaders = corsHeaders({
       'Content-Type': normalizedSegment.contentType,
-      'Cache-Control': 'no-store'
+      'Cache-Control': 'no-store',
+      'Access-Control-Expose-Headers': 'Accept-Ranges, Content-Range, Content-Length'
     }, req);
     const contentRange = response.headers.get('content-range');
     const acceptRanges = response.headers.get('accept-ranges');
-    const contentLength = response.headers.get('content-length');
+    // Do not forward Content-Length for streamed bodies. Edge fetch may decode
+    // upstream transfer encoding, which makes the original length stale and can
+    // cause Chromium ORB/media loaders to reject otherwise valid 206 responses.
     if (contentRange) responseHeaders['Content-Range'] = contentRange;
     if (acceptRanges) responseHeaders['Accept-Ranges'] = acceptRanges;
-    if (contentLength) responseHeaders['Content-Length'] = contentLength;
 
     return withSessionCookie(new Response(req.method === 'HEAD' ? null : normalizedSegment.body, {
       status: response.status,
