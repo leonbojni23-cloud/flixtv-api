@@ -116,14 +116,27 @@ function parseMasterPlaylist(source, manifestUrl) {
 
 function waitForM3U8(page, timeoutMs) {
   let timer;
-  let settleTimer;
+  let candidateTimer;
   let candidate = null;
   let settled = false;
+  const seenRequests = [];
+  let lastRequestFailure = '';
+
+  const safeResource = (value) => {
+    try {
+      const url = new URL(value);
+      return url.hostname + url.pathname;
+    } catch {
+      return 'unknown';
+    }
+  };
 
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       clearTimeout(timer);
-      clearTimeout(settleTimer);
+      clearTimeout(candidateTimer);
+      page.off('request', onRequest);
+      page.off('requestfailed', onRequestFailed);
       page.off('response', onResponse);
     };
 
@@ -135,22 +148,48 @@ function waitForM3U8(page, timeoutMs) {
       else resolve(value);
     };
 
+    const onRequest = (request) => {
+      const url = request.url();
+      if (!/\.m3u8(?:$|[?#])/i.test(url)) return;
+      seenRequests.push(safeResource(url));
+      if (seenRequests.length > 8) seenRequests.shift();
+    };
+
+    const onRequestFailed = (request) => {
+      if (!/\.m3u8(?:$|[?#])/i.test(request.url())) return;
+      lastRequestFailure = request.failure()?.errorText || 'M3U8 request failed';
+    };
+
     const onResponse = (response) => {
-      void (async () => {
-        const url = response.url();
-        const status = response.status();
-        const headers = response.headers();
-        const contentType = headers['content-type'] || '';
-        const looksLikePlaylist =
-          /\.m3u8(?:$|[?#])/i.test(url) ||
-          /mpegurl|vnd\.apple\.mpegurl/i.test(contentType);
+      const url = response.url();
+      const status = response.status();
+      const headers = response.headers();
+      const contentType = headers['content-type'] || '';
+      const looksLikePlaylist =
+        /\.m3u8(?:$|[?#])/i.test(url) ||
+        /mpegurl|vnd\.apple\.mpegurl/i.test(contentType);
 
-        if (!looksLikePlaylist || status < 200 || status >= 300) return;
-        if (!isAllowedStreamUrl(url)) return;
+      if (!looksLikePlaylist || status < 200 || status >= 300) return;
+      if (!isAllowedStreamUrl(url)) return;
 
-        const body = await response.text().catch(() => '');
+      // Record the URL immediately. Do not make successful discovery depend
+      // on response.text(), which may stall on some CDN/streaming responses.
+      const responseCandidate = {
+        url,
+        status,
+        contentType: contentType || 'unknown',
+        playlistType: 'unknown',
+        qualities: []
+      };
+
+      if (!candidate) {
+        candidate = responseCandidate;
+        candidateTimer = setTimeout(() => finish(null, candidate), 2200);
+      }
+
+      void response.text().then((body) => {
         const qualities = parseMasterPlaylist(body, url);
-        const result = {
+        const parsed = {
           url,
           status,
           contentType: contentType || 'unknown',
@@ -159,66 +198,113 @@ function waitForM3U8(page, timeoutMs) {
         };
 
         if (qualities.length) {
-          finish(null, result);
+          console.info('[CineSRC resolver] Master playlist detected', {
+            resource: safeResource(url),
+            variants: qualities.map((quality) => quality.label)
+          });
+          finish(null, parsed);
           return;
         }
 
-        if (!candidate) {
-          candidate = result;
-          settleTimer = setTimeout(() => finish(null, candidate), 1400);
+        // Prefer a parsed media playlist over an unparsed candidate, but keep
+        // listening briefly for the master playlist that normally arrives first.
+        if (!candidate || candidate.playlistType === 'unknown') {
+          candidate = parsed;
+          clearTimeout(candidateTimer);
+          candidateTimer = setTimeout(() => finish(null, candidate), 700);
         }
-      })().catch(() => {});
+      }).catch((error) => {
+        console.warn('[CineSRC resolver] Could not read M3U8 body; keeping detected URL', {
+          resource: safeResource(url),
+          message: error?.message || 'response body unavailable'
+        });
+      });
     };
 
+    page.on('request', onRequest);
+    page.on('requestfailed', onRequestFailed);
     page.on('response', onResponse);
+
     timer = setTimeout(() => {
-      if (candidate) finish(null, candidate);
-      else finish(new Error('Timeout: player-i nuk ngarkoi një M3U8 brenda afatit.'));
+      if (candidate) {
+        finish(null, candidate);
+        return;
+      }
+
+      const diagnostic = seenRequests.length
+        ? 'M3U8 requests started but no successful playlist response was received.'
+        : 'CineSRC did not request an M3U8 playlist in the headless browser.';
+      const suffix = [
+        seenRequests.length ? 'Seen: ' + seenRequests.join(', ') : '',
+        lastRequestFailure ? 'Last request error: ' + lastRequestFailure : ''
+      ].filter(Boolean).join(' | ');
+
+      finish(new Error(
+        diagnostic + (suffix ? ' ' + suffix : '')
+      ));
     }, timeoutMs);
   });
 }
 
+async function triggerPlayback(page, isStreamFound = () => false) {
+  const deadline = Date.now() + 7000;
 
-async function triggerPlayback(page) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await Promise.all(page.frames().map(async (frame) => {
+  while (Date.now() < deadline && !isStreamFound()) {
+    const frames = page.frames();
+
+    await Promise.all(frames.map(async (frame) => {
       try {
         await frame.evaluate(() => {
+          const visible = (element) => {
+            const rect = element.getBoundingClientRect();
+            const style = window.getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0 &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              Number(style.opacity || 1) > 0;
+          };
+
           const video = document.querySelector('video');
           if (video) {
             video.muted = true;
-            const play = video.play();
-            if (play && typeof play.catch === 'function') play.catch(() => {});
+            video.autoplay = true;
+            if (video.paused) {
+              const play = video.play();
+              if (play && typeof play.catch === 'function') play.catch(() => {});
+            }
           }
 
-          const buttons = Array.from(document.querySelectorAll(
-            'button, [role="button"], .vjs-big-play-button, .plyr__control--overlaid'
+          const candidates = Array.from(document.querySelectorAll(
+            'button, [role="button"], [aria-label], [title], ' +
+            '[class*="play"], [id*="play"], .vjs-big-play-button, ' +
+            '.plyr__control--overlaid'
           ));
-          const playButton = buttons.find((element) => {
+
+          const playControl = candidates.find((element) => {
+            if (!visible(element)) return false;
             const label = [
               element.innerText,
               element.getAttribute('aria-label'),
               element.getAttribute('title'),
-              typeof element.className === 'string' ? element.className : ''
+              typeof element.className === 'string' ? element.className : '',
+              element.id || ''
             ].filter(Boolean).join(' ').toLowerCase();
 
-            if (!/\b(play|watch|start|luaj)\b/.test(label)) return false;
-            if (/\b(pause|trailer|skip)\b/.test(label)) return false;
-            const rect = element.getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0;
+            if (!/\b(play|watch|start|luaj|playbtn|play-button)\b/.test(label)) return false;
+            if (/\b(pause|trailer|skip|playlist)\b/.test(label)) return false;
+            return true;
           });
 
-          if (playButton) playButton.click();
+          if (playControl) playControl.click();
         });
       } catch {
-        // A frame can still be loading or disappear while the player starts.
+        // Frames may still be loading or may detach while CineSRC initializes.
       }
     }));
 
-    await new Promise((resolve) => setTimeout(resolve, 180));
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
 }
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -290,31 +376,41 @@ export default async function handler(req, res) {
       'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
     );
 
-    // Start listening before navigation. Return as soon as the master
-    // playlist is observed; do not wait for the entire embed page to settle.
+    // Ensure Puppeteer has attached its initial about:blank main frame
+    // before navigating. This avoids intermittent "main frame too early".
+    await page.evaluate(() => document.readyState);
+
+    // Begin network capture before loading the embed.
+    let streamFound = false;
     const streamResult = waitForM3U8(page, STREAM_WAIT_TIMEOUT_MS)
-      .then((stream) => ({ stream }))
+      .then((stream) => {
+        streamFound = true;
+        return { stream };
+      })
       .catch((error) => ({ streamError: error }));
 
     const navigationResult = page.goto(targetUrl, {
       waitUntil: 'domcontentloaded',
       timeout: NAVIGATION_TIMEOUT_MS
-    }).then(() => ({ navigated: true })).catch((error) => {
-      console.warn('CineSRC navigation warning:', error.message);
-      return { navigationError: error.message };
+    }).then(() => ({ navigated: true })).catch((navigationError) => {
+      console.warn('[CineSRC resolver] Navigation warning', navigationError.message);
+      return { navigationError: navigationError.message };
     });
 
     const firstResult = await Promise.race([streamResult, navigationResult]);
     let stream = firstResult.stream;
 
-    if (!stream) {
-      if (firstResult.streamError) throw firstResult.streamError;
-      // If autoplay did not issue the HLS request by DOMContentLoaded,
-      // make one short, bounded attempt to start the embed's play control.
-      await triggerPlayback(page);
+    if (!stream && !firstResult.streamError) {
+      // The embed's nested video/player may appear after DOMContentLoaded.
+      // Poll its frames for up to seven seconds, not just three quick attempts.
+      await triggerPlayback(page, () => streamFound);
       const finalResult = await streamResult;
       if (finalResult.streamError) throw finalResult.streamError;
       stream = finalResult.stream;
+    }
+
+    if (!stream && firstResult.streamError) {
+      throw firstResult.streamError;
     }
 
     if (!isAllowedStreamUrl(stream.url)) {
