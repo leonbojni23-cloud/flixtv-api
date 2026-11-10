@@ -26,105 +26,6 @@ function isAllowedStreamUrl(value) {
   }
 }
 
-function isCineSrcPageUrl(value) {
-  try {
-    const url = new URL(String(value || ''));
-    return url.protocol === 'https:' &&
-      (url.hostname === 'cinesrc.st' || url.hostname.endsWith('.cinesrc.st'));
-  } catch {
-    return false;
-  }
-}
-
-function attachCineSrcNetworkCapture(page) {
-  const capture = {
-    requestCount: 0,
-    responseCount: 0,
-    headers: null,
-    lastResponse: null
-  };
-  page.__cinesrcCdnCapture = capture;
-
-  page.on('request', (request) => {
-    let url;
-    try { url = new URL(request.url()); } catch { return; }
-    const hostname = url.hostname.toLowerCase();
-    if (hostname !== 'bright67.online' && !hostname.endsWith('.bright67.online')) return;
-
-    capture.requestCount += 1;
-    const headers = request.headers() || {};
-    const isMediaRequest = /\\.(?:jpg|jpeg|png|webp|m4s|mp4|m4v|m4a|ts)(?:$|[?#])/i.test(url.pathname);
-
-    // Prefer headers from an actual media-fragment request, not guessed values.
-    if (!capture.headers || isMediaRequest) {
-      const referer = isCineSrcPageUrl(headers.referer) ? headers.referer : '';
-      let origin = '';
-      try {
-        const parsedOrigin = new URL(String(headers.origin || ''));
-        if (parsedOrigin.protocol === 'https:' &&
-            (parsedOrigin.hostname === 'cinesrc.st' || parsedOrigin.hostname.endsWith('.cinesrc.st'))) {
-          origin = parsedOrigin.origin;
-        }
-      } catch {}
-
-      capture.headers = {
-        userAgent: String(headers['user-agent'] || CINESRC_BROWSER_USER_AGENT).slice(0, 512),
-        accept: String(headers.accept || '*/*').slice(0, 512),
-        acceptLanguage: String(headers['accept-language'] || 'en-US,en;q=0.9').slice(0, 256),
-        referer,
-        origin
-      };
-    }
-  });
-
-  page.on('response', (response) => {
-    try {
-      const url = new URL(response.url());
-      const hostname = url.hostname.toLowerCase();
-      if (hostname !== 'bright67.online' && !hostname.endsWith('.bright67.online')) return;
-      capture.responseCount += 1;
-      capture.lastResponse = {
-        status: response.status(),
-        resource: url.hostname + url.pathname,
-        contentType: response.headers()['content-type'] || 'unknown'
-      };
-    } catch {}
-  });
-
-  return capture;
-}
-
-function encodeProxyHeaders(headers) {
-  if (!headers || typeof headers !== 'object') return '';
-  const token = Buffer.from(JSON.stringify(headers), 'utf8').toString('base64url');
-  return token.length <= 3000 ? token : '';
-}
-
-function encodeProxySession(cookies) {
-  const allowedDomains = new Set(['cinesrc.st', 'bright67.online']);
-  const entries = (Array.isArray(cookies) ? cookies : [])
-    .map((cookie) => ({
-      name: cookie.name,
-      value: cookie.value,
-      domain: String(cookie.domain || '').replace(/^\./, '').toLowerCase(),
-      path: cookie.path || '/',
-      secure: cookie.secure !== false
-    }))
-    .filter((cookie) =>
-      typeof cookie.name === 'string' &&
-      typeof cookie.value === 'string' &&
-      cookie.path.startsWith('/') &&
-      [...allowedDomains].some((domain) =>
-        cookie.domain === domain || cookie.domain.endsWith('.' + domain)
-      )
-    )
-    .slice(-40);
-
-  if (!entries.length) return '';
-  const token = Buffer.from(JSON.stringify(entries), 'utf8').toString('base64url');
-  return token.length <= 8000 ? token : '';
-}
-
 function safeUrl(value) {
   try {
     const url = new URL(value);
@@ -329,7 +230,6 @@ async function prepareCineSrcPage(browser) {
   await page.setUserAgent(CINESRC_BROWSER_USER_AGENT);
   await page.setViewport({ width: 1280, height: 720 });
   await page.setCacheEnabled(false);
-  attachCineSrcNetworkCapture(page);
 
   // Wait until Puppeteer has attached the initial main frame.
   await page.evaluate(() => document.readyState);
@@ -452,40 +352,6 @@ async function triggerPlayback(page, isStreamFound = () => false) {
   }
 }
 
-async function waitForCineSrcCdnSession(page, timeoutMs = 2200) {
-  const getCookies = () => page.browserContext().cookies();
-
-  const hasCdnCookie = (cookies) => (cookies || []).some((cookie) => {
-    const domain = String(cookie.domain || '').replace(/^\./, '').toLowerCase();
-    return domain === 'bright67.online' || domain.endsWith('.bright67.online');
-  });
-
-  let cookies = await getCookies().catch(() => []);
-  if (hasCdnCookie(cookies)) return cookies;
-
-  // Network activity is captured from the start of navigation. Only wait here
-  // if no CDN response has been observed yet; never assume a cookie was issued.
-  const capture = page.__cinesrcCdnCapture;
-  if (!capture || capture.responseCount === 0) {
-    try {
-      await page.waitForResponse((response) => {
-        try {
-          const hostname = new URL(response.url()).hostname.toLowerCase();
-          return (hostname === 'bright67.online' || hostname.endsWith('.bright67.online')) &&
-            response.status() < 500;
-        } catch {
-          return false;
-        }
-      }, { timeout: timeoutMs });
-    } catch {
-      // A provider may serve media on cinesrc.st or may not issue a CDN cookie.
-    }
-  }
-
-  cookies = await getCookies().catch(() => cookies);
-  return cookies;
-}
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -587,74 +453,11 @@ export default async function handler(req, res) {
       throw new Error('URL e stream-it nuk kaloi kontrollin e host-it.');
     }
 
-    // Use the exact headers observed on CineSRC's own CDN requests. The CDN
-    // rejects direct browser XHRs from FLIXTV and may return a hotlink-block page
-    // when a proxy guesses a different Referer or User-Agent.
-    const fallbackPageReferrer = type === 'movie'
-      ? `${CINESRC_ORIGIN}/embed/movie/${tmdbId}`
-      : `${CINESRC_ORIGIN}/embed/tv/${tmdbId}?s=${seasonNumber}&e=${episodeNumber}`;
-
-    let proxySession = '';
-    let browserCookies = [];
-    try {
-      browserCookies = await waitForCineSrcCdnSession(page, 2200);
-      proxySession = encodeProxySession(browserCookies);
-    } catch (cookieError) {
-      console.warn('CineSRC browser cookie capture failed:', cookieError.message);
-    }
-
-    const capture = page?.__cinesrcCdnCapture || {};
-    const capturedHeaders = capture.headers || {};
-    const proxyHeaders = {
-      userAgent: capturedHeaders.userAgent || CINESRC_BROWSER_USER_AGENT,
-      accept: capturedHeaders.accept || '*/*',
-      acceptLanguage: capturedHeaders.acceptLanguage || 'en-US,en;q=0.9',
-      referer: isCineSrcPageUrl(capturedHeaders.referer)
-        ? capturedHeaders.referer
-        : fallbackPageReferrer,
-      origin: capturedHeaders.origin || CINESRC_ORIGIN
-    };
-    const proxyHeaderToken = encodeProxyHeaders(proxyHeaders);
-    const sessionEntries = proxySession
-      ? JSON.parse(Buffer.from(proxySession, 'base64url').toString('utf8'))
-      : [];
-    const sessionDomains = [...new Set(sessionEntries.map((cookie) => cookie.domain))];
-    const cdnCookieCount = sessionEntries.filter((cookie) =>
-      cookie.domain === 'bright67.online' || cookie.domain.endsWith('.bright67.online')
-    ).length;
-
-    const refererHost = (() => {
-      try { return new URL(proxyHeaders.referer).host; } catch { return 'unknown'; }
-    })();
-
-    console.info('[CineSRC resolver] Captured playback session', {
-      browserCookieCount: browserCookies.length,
-      sessionCookieCount: sessionEntries.length,
-      cdnCookieCount,
-      sessionDomains,
-      cdnRequestCount: capture.requestCount || 0,
-      cdnResponseCount: capture.responseCount || 0,
-      lastCdnResponse: capture.lastResponse || null,
-      proxyRefererHost: refererHost,
-      proxyOrigin: proxyHeaders.origin
-    });
-
-    const sessionParam = proxySession
-      ? '&session=' + encodeURIComponent(proxySession)
-      : '';
-    const headersParam = proxyHeaderToken
-      ? '&headers=' + encodeURIComponent(proxyHeaderToken)
-      : '';
-    const streamUrl = '/api/proxy?ref=' + encodeURIComponent(proxyHeaders.referer) +
-      sessionParam + headersParam + '&url=' + encodeURIComponent(stream.url);
-
     return res.status(200).json({
       success: true,
       source: 'cinesrc',
       format: 'hls',
       masterUrl: stream.url,
-      // Used only if the direct master is rejected by the CDN/session policy.
-      streamUrl,
       playlistType: stream.playlistType,
       qualities: stream.qualities,
       detected: {
