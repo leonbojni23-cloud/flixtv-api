@@ -1,5 +1,5 @@
 // api/stream.js
-import { getBrowser, resetBrowser } from '../lib/puppeteer.js';
+import { getBrowser } from '../lib/puppeteer.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -256,35 +256,12 @@ export default async function handler(req, res) {
   const targetUrl = target.href;
 
   let browser;
-  let context;
   let page;
 
   try {
-    // A warm serverless instance can retain a stale Chromium socket after
-    // Vercel freezes/thaws it. Retry context creation once with a fresh process.
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        browser = await getBrowser();
-        context = await browser.createBrowserContext();
-        page = await context.newPage();
-        break;
-      } catch (browserError) {
-        if (context) {
-          try { await context.close(); } catch {}
-        }
-        context = null;
-        page = null;
-        resetBrowser(browser);
-        browser = null;
-        const retryable = /target closed|session closed|protocol error|browser.*disconnected/i.test(
-          String(browserError && browserError.message || browserError)
-        );
-        if (!retryable || attempt === 1) throw browserError;
-        console.warn('Retrying CineSRC resolver with a fresh Chromium instance.');
-      }
-    }
+    browser = await getBrowser();
+    page = await browser.newPage();
 
-    if (!page || !context) throw new Error('Chromium nuk krijoi dot një faqe të re.');
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
     await page.setUserAgent(
       'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
@@ -342,8 +319,11 @@ export default async function handler(req, res) {
       error: error.message
     });
   } finally {
-    if (context) {
-      try { await context.close(); } catch {}
+    if (page && !page.isClosed()) {
+      try { await page.close(); } catch {}
+    }
+    if (browser) {
+      try { await browser.close(); } catch {}
     }
   }
 }
