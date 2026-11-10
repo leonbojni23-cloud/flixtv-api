@@ -30,7 +30,7 @@ function encodeProxySession(cookies) {
     .map((cookie) => ({
       name: cookie.name,
       value: cookie.value,
-      domain: String(cookie.domain || '').replace(/^\\./, '').toLowerCase(),
+      domain: String(cookie.domain || '').replace(/^\./, '').toLowerCase(),
       path: cookie.path || '/',
       secure: cookie.secure !== false
     }))
